@@ -154,7 +154,7 @@ function onLock () {
       <div class="about-section">
         <div class="about-version">
           <span class="about-ico">🔑</span>
-          <span>密码管理 <b>v{{ APP_VERSION }}</b></span>
+          <span>我的密码 <b>v{{ APP_VERSION }}</b></span>
         </div>
         <button class="about-row" @click="openRepo">
           <span class="about-label">仓库地址</span>

@@ -525,7 +525,7 @@ onBeforeUnmount(() => {
           <div class="brand-logo">🔑</div>
           <div class="brand-meta">
             <div class="brand-name">
-              密码管理
+              我的密码
               <span v-if="store.secured" class="badge">已加密</span>
             </div>
             <div class="brand-sub">
