@@ -24,10 +24,9 @@
 
 ## 🖼 截图
 
-<!-- 在下方填入市场/仓库截图链接 -->
-| 主界面 | 新增/编辑 | TOTP 动态码 |
+| 主界面 | 新增 / 编辑密码 | 离线二维码识别 |
 | :-: | :-: | :-: |
-| _(待添加)_ | _(待添加)_ | _(待添加)_ |
+| <img src="images/main.png" width="260" alt="主界面"> | <img src="images/add-entry.png" width="200" alt="新增密码"> | <img src="images/qr-scan.png" width="200" alt="离线二维码识别"> |
 
 ## 🧱 技术栈
 
