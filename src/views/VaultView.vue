@@ -15,6 +15,7 @@ import {
   addGroup,
   moveGroupToRoot,
   exportJson,
+  exportScopeJson,
   importJson,
   lock
 } from '../store/vault'
@@ -248,6 +249,21 @@ function onExport () {
   if (!path) return
   window.services.saveTextFile(path, exportJson())
   showToast('导出成功')
+  window.utools.shellShowItemInFolder(path)
+  moreOpen.value = false
+}
+
+// 导出当前视图（选中分组及其子分组 / 全部 / 未分组 / 收藏）
+function onExportView () {
+  const scope = selection.value
+  const name = selectedName.value
+  const path = window.utools.showSaveDialog({
+    title: `导出「${name}」`,
+    defaultPath: `passwords_${name}_${Date.now()}.json`
+  })
+  if (!path) return
+  window.services.saveTextFile(path, exportScopeJson(scope))
+  showToast(`已导出「${name}」`)
   window.utools.shellShowItemInFolder(path)
   moreOpen.value = false
 }
@@ -560,7 +576,8 @@ onBeforeUnmount(() => {
           <button class="icon-round" title="更多" @click="moreOpen = !moreOpen">⋯</button>
           <div v-if="moreOpen" class="more-menu">
             <button class="menu-item" @click="showGen = true; moreOpen = false">🎲 生成密码</button>
-            <button class="menu-item" @click="onExport">⬇ 导出</button>
+            <button class="menu-item" @click="onExportView">📂 导出当前分组</button>
+            <button class="menu-item" @click="onExport">⬇ 导出全部</button>
             <button class="menu-item" @click="onImport">⬆ 导入</button>
             <button class="menu-item" @click="importBrowser">🌐 导入浏览器密码</button>
             <button class="menu-item" @click="showWifi = true; moreOpen = false">📶 WiFi 密码</button>

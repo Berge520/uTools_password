@@ -478,6 +478,41 @@ function exportJson () {
   )
 }
 
+// 收集分组及其所有子孙分组的 id
+function collectGroupIds (groupId) {
+  const ids = [groupId]
+  const stack = store.groups.filter((g) => g.parentId === groupId).map((g) => g.id)
+  while (stack.length) {
+    const id = stack.pop()
+    ids.push(id)
+    store.groups.forEach((g) => { if (g.parentId === id) stack.push(g.id) })
+  }
+  return ids
+}
+
+// 按范围导出：'all' | 'uncat' | 'fav' | groupId（含其子分组）
+function exportScopeJson (scope) {
+  let entries = []
+  let groups = []
+  if (scope === 'all') {
+    entries = store.entries
+    groups = store.groups
+  } else if (scope === 'uncat') {
+    entries = store.entries.filter((e) => !e.groupId)
+  } else if (scope === 'fav') {
+    entries = store.entries.filter((e) => e.favorite)
+  } else if (scope) {
+    const ids = collectGroupIds(scope)
+    entries = store.entries.filter((e) => ids.includes((e.groupId || null)))
+    groups = store.groups.filter((g) => ids.includes(g.id))
+  }
+  return JSON.stringify(
+    { version: 2, exportedAt: new Date().toISOString(), scope: scope || '', entries, groups },
+    null,
+    2
+  )
+}
+
 // 导入 JSON 字符串（替换现有条目与分组）
 function importJson (jsonText) {
   const data = JSON.parse(jsonText)
@@ -516,6 +551,7 @@ export {
   moveGroup,
   moveGroupToRoot,
   exportJson,
+  exportScopeJson,
   importJson,
   generateId
 }

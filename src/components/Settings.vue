@@ -82,7 +82,7 @@ const change = reactive({
 })
 
 const repoUrl = 'https://github.com/Berge520/uTools_password'
-const APP_VERSION = '0.0.1'
+const APP_VERSION = '0.0.2'
 
 function openRepo () {
   window.utools.shellOpenExternal(repoUrl)

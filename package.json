@@ -1,4 +1,6 @@
 {
+  "name": "my-password-utools",
+  "version": "0.0.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
