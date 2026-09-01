@@ -13,6 +13,7 @@ const store = reactive({
   groups: [],       // 分组：[{ id, name, parentId }]
   syncEnabled: true, // 是否写入可被 uTools 同步的 dbStorage（关闭则仅本地文件）
   syncBlocked: false, // 非付费用户：云端同步被锁定
+  autoLockMinutes: 5, // 主密码空闲自动锁定分钟数（0=关闭）
   unlockError: '',  // 解锁错误提示
   bootNotice: ''    // 启动提示（如未在 uTools 环境）
 })
@@ -27,6 +28,25 @@ function generateId () {
 // 生成可跨上下文克隆的纯对象（Vue 响应式代理不能被 structuredClone，须先转纯数据）
 function toPlain (value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+// ---------- 自动锁定分钟数（存 localStorage）----------
+function loadAutoLock () {
+  try {
+    const v = parseInt(window.localStorage.getItem('password_autolock'), 10)
+    return Number.isFinite(v) && v >= 0 ? v : 5
+  } catch (e) {
+    return 5
+  }
+}
+
+function setAutoLock (minutes) {
+  const m = Math.max(0, parseInt(minutes, 10) || 0)
+  store.autoLockMinutes = m
+  try {
+    window.localStorage.setItem('password_autolock', String(m))
+  } catch (e) {}
+  return m
 }
 
 // ---------- 同步开关（存 localStorage，本地不回传）----------
@@ -108,6 +128,30 @@ function loadBlob () {
   return store.syncEnabled ? readDbBlob() : readFileBlob()
 }
 
+// 获取当前持久化数据（加密或明文的 blob）用于云端备份
+function getBackupBlob () {
+  return loadBlob()
+}
+
+// 从云端 blob 恢复：写回当前生效后端并刷新内存状态
+function saveBlobFromBackup (blob) {
+  if (!blob) return
+  currentBlob = blob
+  if (blob.mode === 'encrypted') {
+    store.secured = true
+    store.locked = true
+    store.entries = []
+    store.groups = []
+    clearSessionKey()
+  } else {
+    store.secured = false
+    store.locked = false
+    store.entries = Array.isArray(blob.entries) ? blob.entries : []
+    store.groups = Array.isArray(blob.groups) ? blob.groups : []
+  }
+  persistBlob(blob)
+}
+
 // 开启 / 关闭数据同步：把当前数据从旧后端迁移到新后端，并清理旧副本
 function setSyncEnabled (on) {
   on = !!on
@@ -143,12 +187,14 @@ function initialize () {
     store.entries = []
     store.groups = []
     store.syncEnabled = true
+    store.autoLockMinutes = loadAutoLock()
     store.ready = true
     store.bootNotice = '未检测到 uTools 环境，请通过 uTools 插件开发工具打开本插件。'
     return
   }
 
   store.syncEnabled = loadSyncFlag()
+  store.autoLockMinutes = loadAutoLock()
 
   // 根据 uTools 会员/数据同步状态约束：未开启数据同步则强制本地存储
   const m = refreshMember()
@@ -167,12 +213,13 @@ function initialize () {
       store.entries = []
       store.groups = []
     } else if (raw.mode === 'encrypted') {
-      // 已加密：需解锁
+      // 已加密：需解锁，但若宽限期内可自动解锁
       store.secured = true
       store.locked = true
       store.entries = []
       store.groups = []
       currentBlob = raw
+      tryAutoUnlock()
     } else {
       // 明文模式
       store.secured = false
@@ -201,10 +248,17 @@ function persistPlain () {
 }
 
 function persistEncrypted () {
-  currentBlob = window.services.encryptData(
-    JSON.stringify({ entries: store.entries, groups: store.groups }),
-    masterPassword
-  )
+  const payload = JSON.stringify({ entries: store.entries, groups: store.groups })
+  const salt = currentBlob ? currentBlob.salt : ''
+  if (masterPassword) {
+    currentBlob = window.services.encryptData(payload, masterPassword)
+  } else if (sessionKey && salt) {
+    // 自动解锁场景（内存无主密码）：用会话密钥加密，保留原 salt 保持一致
+    currentBlob = window.services.encryptDataWithKey(payload, salt, sessionKey)
+  } else {
+    // 兜底：理论上不应发生
+    return
+  }
   persistBlob(currentBlob)
 }
 
@@ -226,11 +280,67 @@ function verifyPassword (pw) {
 }
 
 // 设置/开启主密码（把当前明文条目加密保存）
+// 会话密钥（宽限期自动解锁）。仅在设定了自动锁定时才保存密钥；锁定/过期即删除
+let sessionKey = null
+
+function saveSessionKey () {
+  if (!store.secured || !sessionKey || !store.autoLockMinutes) return
+  try {
+    window.services.storeSession({ key: sessionKey, expireAt: Date.now() + store.autoLockMinutes * 60000 })
+  } catch (e) {}
+}
+
+function clearSessionKey () {
+  sessionKey = null
+  try {
+    window.services.clearSession()
+  } catch (e) {}
+}
+
+// 每次有活动时刷新宽限期（会话过期时间 = 最近活动 + 设定时长）
+function touchSession () {
+  if (!store.secured || store.locked || !sessionKey) return
+  if (!store.autoLockMinutes) return
+  saveSessionKey()
+}
+
+// 重进插件时，若会话密钥未过期则自动解锁
+function tryAutoUnlock () {
+  if (!store.secured || !currentBlob) return false
+  if (!store.autoLockMinutes) return false
+  let s = null
+  try {
+    s = window.services.readSession()
+  } catch (e) {
+    return false
+  }
+  if (!s || !s.key || !s.expireAt || Date.now() > s.expireAt) {
+    try { window.services.clearSession() } catch (e) {}
+    return false
+  }
+  try {
+    const plain = window.services.decryptDataWithKey(currentBlob, s.key)
+    const data = JSON.parse(plain)
+    store.entries = Array.isArray(data) ? data : (Array.isArray(data.entries) ? data.entries : [])
+    store.groups = Array.isArray(data) ? [] : (Array.isArray(data.groups) ? data.groups : [])
+    store.locked = false
+    sessionKey = s.key
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
 function setMasterPassword (pw) {
   masterPassword = pw
   store.secured = true
   store.locked = false
   save()
+  // 记录会话密钥，便于宽限期自动解锁
+  try {
+    sessionKey = window.services.deriveKeyBase64(pw, currentBlob.salt)
+    saveSessionKey()
+  } catch (e) {}
   return true
 }
 
@@ -245,6 +355,10 @@ function unlock (pw) {
     masterPassword = pw
     store.locked = false
     store.unlockError = ''
+    try {
+      sessionKey = window.services.deriveKeyBase64(pw, currentBlob.salt)
+    } catch (e) {}
+    saveSessionKey()
     return { ok: true }
   } catch (e) {
     store.unlockError = '主密码错误，请重试'
@@ -252,13 +366,14 @@ function unlock (pw) {
   }
 }
 
-// 锁定（清空内存中的密码与条目）
-function lock () {
+// 锁定（清空内存中的密码与条目）；preserveSession 用于「退出插件」场景，保留宽限期会话
+function lock (preserveSession = false) {
   masterPassword = ''
   store.entries = []
   store.groups = []
   store.locked = true
   store.unlockError = ''
+  if (!preserveSession) clearSessionKey()
 }
 
 // 修改主密码（需先验证旧密码）
@@ -266,6 +381,11 @@ function changeMasterPassword (oldPw, newPw) {
   if (!verifyPassword(oldPw)) return { ok: false, error: '当前主密码不正确' }
   masterPassword = newPw
   save()
+  // 用新密码重派生会话密钥
+  try {
+    sessionKey = window.services.deriveKeyBase64(newPw, currentBlob.salt)
+    saveSessionKey()
+  } catch (e) {}
   return { ok: true }
 }
 
@@ -275,6 +395,7 @@ function disableMasterPassword (pw) {
   masterPassword = ''
   store.secured = false
   store.locked = false
+  clearSessionKey()
   persistPlain()
   return { ok: true }
 }
@@ -534,6 +655,11 @@ export {
   changeMasterPassword,
   disableMasterPassword,
   setSyncEnabled,
+  setAutoLock,
+  touchSession,
+  tryAutoUnlock,
+  getBackupBlob,
+  saveBlobFromBackup,
   addEntry,
   addEntries,
   updateEntry,

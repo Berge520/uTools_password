@@ -12,6 +12,7 @@ const symbols = ref(false)
 const excludeAmbiguous = ref(true)
 
 const password = ref('')
+const locked = ref(false)
 
 const strength = computed(() => {
   let pool = 0
@@ -27,6 +28,7 @@ const strength = computed(() => {
 })
 
 function refresh () {
+  if (locked.value) return
   password.value = generatePassword({
     length: length.value,
     lowercase: lowercase.value,
@@ -35,6 +37,10 @@ function refresh () {
     symbols: symbols.value,
     excludeAmbiguous: excludeAmbiguous.value
   })
+}
+
+function toggleLock () {
+  locked.value = !locked.value
 }
 
 function useIt () {
@@ -56,31 +62,39 @@ onMounted(refresh)
         <span class="gen-strength" :style="{ color: strength.color }">
           {{ strength.label }} · {{ length }} 位
         </span>
-        <button class="btn icon sm" title="重新生成" @click="refresh">↻</button>
+        <button
+          class="gen-lock"
+          :class="{ on: locked }"
+          :title="locked ? '已锁定，点击解锁' : '锁定（防止重新生成覆盖）'"
+          @click="toggleLock"
+        >{{ locked ? '🔒' : '🔓' }}</button>
+        <button class="btn icon sm" title="重新生成" :disabled="locked" @click="refresh">↻</button>
       </div>
 
-      <div class="gen-body">
+      <div v-if="locked" class="gen-locked-hint">已锁定，重新生成与调整参数已被禁用，当前密码不会被覆盖。</div>
+
+      <div class="gen-body" :class="{ locked }">
         <div class="gen-row">
           <label>长度</label>
-          <input v-model.number="length" class="input gen-length" type="number" min="4" max="64" />
-          <input v-model.number="length" class="slider" type="range" min="4" max="64" />
+          <input v-model.number="length" class="input gen-length" type="number" min="4" max="64" :disabled="locked" />
+          <input v-model.number="length" class="slider" type="range" min="4" max="64" :disabled="locked" />
           <span class="gen-num">{{ length }}</span>
         </div>
 
         <label class="check">
-          <input v-model="lowercase" type="checkbox" /> 小写字母 (a-z)
+          <input v-model="lowercase" type="checkbox" :disabled="locked" /> 小写字母 (a-z)
         </label>
         <label class="check">
-          <input v-model="uppercase" type="checkbox" /> 大写字母 (A-Z)
+          <input v-model="uppercase" type="checkbox" :disabled="locked" /> 大写字母 (A-Z)
         </label>
         <label class="check">
-          <input v-model="digits" type="checkbox" /> 数字 (0-9)
+          <input v-model="digits" type="checkbox" :disabled="locked" /> 数字 (0-9)
         </label>
         <label class="check">
-          <input v-model="symbols" type="checkbox" /> 符号 (!$&amp;…)
+          <input v-model="symbols" type="checkbox" :disabled="locked" /> 符号 (!$&amp;…)
         </label>
         <label class="check">
-          <input v-model="excludeAmbiguous" type="checkbox" /> 剔除易混淆字符 (0O1lI)
+          <input v-model="excludeAmbiguous" type="checkbox" :disabled="locked" /> 剔除易混淆字符 (0O1lI)
         </label>
       </div>
 
@@ -117,6 +131,47 @@ onMounted(refresh)
 .gen-strength {
   font-size: 12px;
   white-space: nowrap;
+}
+
+.gen-lock {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 6px;
+  transition: background 0.14s, transform 0.14s;
+}
+
+.gen-lock:hover {
+  background: var(--panel-2);
+  transform: scale(1.08);
+}
+
+.gen-lock.on {
+  color: var(--warning);
+}
+
+.gen-locked-hint {
+  font-size: 12px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: -8px 0 12px;
+}
+
+.gen-body.locked {
+  opacity: 0.6;
+}
+
+.gen-body.locked .check {
+  cursor: not-allowed;
+}
+
+.gen-body.locked .check input,
+.gen-body.locked input:disabled {
+  cursor: not-allowed;
 }
 
 .gen-row {

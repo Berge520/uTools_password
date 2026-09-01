@@ -7,13 +7,52 @@ import {
   disableMasterPassword,
   lock,
   clearEntries,
-  setSyncEnabled
+  setSyncEnabled,
+  setAutoLock
 } from '../store/vault'
 import { member, refreshMember } from '../store/member'
 import { theme, setTheme } from '../store/theme'
+import { cloud, loadCloud, saveCloud, testConnection, backupNow, restoreNow } from '../store/cloud'
 import { showToast } from '../utils/toast'
 
 const emit = defineEmits(['close'])
+
+const webdavBusy = ref(false)
+const webdavMsg = ref('')
+const restoreConfirm = ref(false)
+
+function toggleCloud () {
+  cloud.enabled = !cloud.enabled
+  saveCloud()
+  webdavMsg.value = ''
+}
+
+async function onWebdavTest () {  saveCloud()
+  webdavBusy.value = true
+  webdavMsg.value = ''
+  const r = await testConnection()
+  webdavBusy.value = false
+  webdavMsg.value = r.ok ? '✅ 连接成功' : ('❌ ' + (r.error || '失败'))
+}
+
+async function onWebdavBackup () {
+  saveCloud()
+  webdavBusy.value = true
+  webdavMsg.value = ''
+  const r = await backupNow()
+  webdavBusy.value = false
+  webdavMsg.value = r.ok ? '✅ 备份成功' : ('❌ ' + (r.error || '失败'))
+}
+
+async function onWebdavRestore () {
+  webdavBusy.value = true
+  webdavMsg.value = ''
+  const r = await restoreNow()
+  webdavBusy.value = false
+  restoreConfirm.value = false
+  webdavMsg.value = r.ok ? ('✅ 已从云端恢复' + (r.encrypted ? '（加密数据，需输入主密码）' : '')) : ('❌ ' + (r.error || '失败'))
+  if (r.ok) emit('close')
+}
 
 const themeOptions = [
   { key: 'light', label: '亮色', icon: '☀️' },
@@ -21,7 +60,7 @@ const themeOptions = [
   { key: 'sepia', label: '护眼', icon: '🍃' }
 ]
 
-onMounted(() => refreshMember())
+onMounted(() => { refreshMember(); loadCloud() })
 
 const localPath = computed(() => {
   try {
@@ -42,6 +81,12 @@ function toggleSync () {
   if (res.ok) {
     showToast(store.syncEnabled ? '已开启数据同步（备份到 uTools 云端）' : '已关闭数据同步（仅保存在本机）')
   }
+}
+
+function onAutoLockChange (e) {
+  const v = parseInt(e.target.value, 10)
+  setAutoLock(v)
+  showToast(v === 0 ? '已关闭自动锁定' : `已设为 ${v} 分钟自动锁定`)
 }
 
 const showClearConfirm = ref(false)
@@ -82,7 +127,7 @@ const change = reactive({
 })
 
 const repoUrl = 'https://github.com/Berge520/uTools_password'
-const APP_VERSION = '0.0.2'
+const APP_VERSION = '0.0.3'
 
 function openRepo () {
   window.utools.shellOpenExternal(repoUrl)
@@ -162,6 +207,84 @@ function onLock () {
           <span class="arrow">›</span>
         </button>
         <div class="about-made">由 AI 开发 · 个人项目 · AGPL-3.0</div>
+      </div>
+
+      <!-- 自动锁定时长 -->
+      <div v-if="store.secured" class="autolock-section">
+        <div class="autolock-title">自动锁定</div>
+        <div class="autolock-row">
+          <span class="autolock-label">主密码空闲自动锁定</span>
+          <select
+            class="input autolock-select"
+            :value="store.autoLockMinutes"
+            @change="onAutoLockChange($event)"
+          >
+            <option :value="0">关闭</option>
+            <option :value="1">1 分钟</option>
+            <option :value="5">5 分钟</option>
+            <option :value="15">15 分钟</option>
+            <option :value="30">30 分钟</option>
+            <option :value="60">60 分钟</option>
+          </select>
+        </div>
+        <div class="autolock-desc">空闲超过该时长后自动锁定，需重新输入主密码；开启主密码后生效。</div>
+      </div>
+
+      <!-- WebDAV 云备份 -->
+      <div class="cloud-section">
+        <div class="cloud-head">
+          <div class="cloud-title">云备份（WebDAV）</div>
+          <button class="switch" :class="{ on: cloud.enabled }" @click="toggleCloud">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+
+        <div v-if="!cloud.enabled" class="cloud-note">
+          开启后可将密码库备份到 WebDAV 服务器（支持坚果云 / Nextcloud / 群晖等）。
+        </div>
+
+        <template v-else>
+          <div class="field">
+            <label>服务器地址</label>
+            <input v-model="cloud.url" class="input" placeholder="https://dav.example.com/webdav/" @change="saveCloud" />
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>用户名</label>
+              <input v-model="cloud.user" class="input" placeholder="账号" @change="saveCloud" />
+            </div>
+            <div class="field">
+              <label>密码</label>
+              <input v-model="cloud.pass" class="input" type="password" placeholder="应用密码" @change="saveCloud" />
+            </div>
+          </div>
+          <div class="field">
+            <label>子路径（可选）</label>
+            <input v-model="cloud.path" class="input" placeholder="如 backup / 留空则存到根目录" @change="saveCloud" />
+          </div>
+          <div class="field">
+            <label>备份文件名</label>
+            <input v-model="cloud.fileName" class="input mono-input" placeholder="password-vault-backup.json" @change="saveCloud" />
+          </div>
+
+          <div class="cloud-actions">
+            <button class="btn sm" :disabled="webdavBusy" @click="onWebdavTest">测试连接</button>
+            <button class="btn sm primary" :disabled="webdavBusy" @click="onWebdavBackup">立即备份</button>
+            <button class="btn sm" :disabled="webdavBusy || !store.entries.length" @click="restoreConfirm = true">从云端恢复</button>
+          </div>
+          <div v-if="webdavMsg" class="cloud-msg">{{ webdavMsg }}</div>
+          <div class="cloud-note">
+            备份内容：{{ store.secured ? '已加密（AES-256）' : '明文（建议先开启主密码）' }}。地址、账号、密码仅保存在本机。
+          </div>
+
+          <div v-if="restoreConfirm" class="cloud-restore-confirm">
+            <p>将用云端备份<b>覆盖</b>当前所有数据，此操作不可撤销。确认继续？</p>
+            <div class="modal-actions">
+              <button class="btn" @click="restoreConfirm = false">取消</button>
+              <button class="btn red" @click="onWebdavRestore">覆盖恢复</button>
+            </div>
+          </div>
+        </template>
       </div>
 
       <!-- 数据同步（uTools 会员） -->
@@ -625,14 +748,124 @@ function onLock () {
   margin-top: 2px;
 }
 
-/* 危险操作 */
-.danger-section {
+/* 自动锁定 */
+.autolock-section {
   margin-bottom: 20px;
   padding-bottom: 18px;
   border-bottom: 1px solid var(--border);
 }
 
-.danger-title {
+.autolock-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.autolock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.autolock-label {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.autolock-select {
+  width: 130px;
+  height: 36px;
+}
+
+.autolock-desc {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* 云备份 */
+.cloud-section {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cloud-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.cloud-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.cloud-head .cloud-title {
+  margin-bottom: 0;
+}
+
+.cloud-head .switch {
+  flex-shrink: 0;
+}
+
+.field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.field-row .field {
+  flex: 1;
+}
+
+.cloud-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cloud-msg {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.cloud-note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.cloud-restore-confirm {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  background: color-mix(in srgb, var(--danger) 6%, var(--panel));
+  border-radius: 10px;
+}
+
+.cloud-restore-confirm p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cloud-restore-confirm .modal-actions {
+  justify-content: flex-end;
+}
+
+/* 危险操作 */
+.danger-section {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}.danger-title {
   font-size: 13px;
   color: var(--danger);
   font-weight: 600;

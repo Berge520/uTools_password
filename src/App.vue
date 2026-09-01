@@ -1,16 +1,70 @@
 <script setup>
-import { onMounted } from 'vue'
-import { store, initialize, lock } from './store/vault'
-import { toast } from './utils/toast'
+import { onMounted, onBeforeUnmount, watch } from 'vue'
+import { store, initialize, lock, touchSession } from './store/vault'
+import { toast, showToast } from './utils/toast'
 import { loadTheme } from './store/theme'
 import VaultView from './views/VaultView.vue'
 import LockScreen from './components/LockScreen.vue'
 
+// ---------- 空闲自动锁定 ----------
+let idleTimer = null
+let lastEvent = 0
+
+function clearIdleTimer () {
+  if (idleTimer) {
+    clearTimeout(idleTimer)
+    idleTimer = null
+  }
+}
+
+function armIdleLock () {
+  clearIdleTimer()
+  if (!store.secured || store.locked) return
+  const minutes = store.autoLockMinutes
+  if (!minutes || minutes <= 0) return
+  // 有活动就刷新宽限期会话（重进免输密码）
+  touchSession()
+  idleTimer = setTimeout(() => {
+    lock()
+    showToast('长时间未操作，已锁定')
+    idleTimer = null
+  }, minutes * 60 * 1000)
+}
+
+function onActivity () {
+  const now = Date.now()
+  if (now - lastEvent > 1000) {
+    lastEvent = now
+    armIdleLock()
+  }
+}
+
 onMounted(() => {
   loadTheme()
-  window.utools.onPluginEnter(() => initialize())
-  window.utools.onPluginOut(() => lock())
+  window.utools.onPluginEnter(() => { initialize(); armIdleLock() })
+  window.utools.onPluginOut(() => { clearIdleTimer(); lock(true) })
+
   initialize()
+  window.addEventListener('mousemove', onActivity)
+  window.addEventListener('keydown', onActivity)
+  window.addEventListener('mousedown', onActivity)
+  window.addEventListener('scroll', onActivity, true)
+  armIdleLock()
+
+  // 解锁后立即开始计时；更改自动锁定时长也重新计时
+  watch(() => store.locked, (locked) => {
+    if (locked) clearIdleTimer()
+    else armIdleLock()
+  })
+  watch(() => store.autoLockMinutes, () => armIdleLock())
+})
+
+onBeforeUnmount(() => {
+  clearIdleTimer()
+  window.removeEventListener('mousemove', onActivity)
+  window.removeEventListener('keydown', onActivity)
+  window.removeEventListener('mousedown', onActivity)
+  window.removeEventListener('scroll', onActivity, true)
 })
 </script>
 

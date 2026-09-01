@@ -231,6 +231,18 @@ function toggleReveal (id) {
   revealed.value[id] = !revealed.value[id]
 }
 
+// 一键复制完整信息，方便分享给同事
+function shareEntry (entry) {
+  if (batchMode.value) return
+  const lines = [`标题：${entry.title || '未命名'}`]
+  if (entry.username) lines.push(`账号：${entry.username}`)
+  if (entry.password) lines.push(`密码：${entry.password}`)
+  if (entry.url) lines.push(`网址：${entry.url}`)
+  if (entry.notes) lines.push(`备注：${entry.notes}`)
+  window.utools.copyText(lines.join('\n'))
+  showToast('已复制完整信息，可直接分享')
+}
+
 function openExternal (entry) {
   if (batchMode.value) return
   if (!entry.url) return
@@ -680,6 +692,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="card-actions">
+              <button class="card-act" title="复制完整信息（分享）" @click="shareEntry(entry)">📤</button>
               <button class="card-act" title="编辑" @click="openEdit(entry)">✏️</button>
               <button class="card-act danger" title="删除" @click="onDelete(entry)">🗑</button>
             </div>

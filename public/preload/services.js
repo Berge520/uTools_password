@@ -200,6 +200,98 @@ function decryptData(blob, password) {
   return decrypted.toString('utf8')
 }
 
+// 使用已派生密钥加密（自动解锁场景下仍可安全写盘，保留原 salt 以保持一致）
+function encryptDataWithKey(plaintext, saltBase64, keyBase64) {
+  const salt = Buffer.from(saltBase64, 'base64')
+  const iv = crypto.randomBytes(12)
+  const key = Buffer.from(keyBase64, 'base64')
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  return {
+    mode: 'encrypted',
+    salt: salt.toString('base64'),
+    iv: iv.toString('base64'),
+    authTag: cipher.getAuthTag().toString('base64'),
+    cipher: encrypted.toString('base64')
+  }
+}
+
+// 由密码+盐派生密钥并返回 base64（用于宽限期自动解锁）
+function deriveKeyBase64(password, saltBase64) {
+  const key = deriveKey(password, Buffer.from(saltBase64, 'base64'))
+  return key.toString('base64')
+}
+
+// 直接使用已派生密钥解密（免重输密码的自动解锁）
+function decryptDataWithKey(blob, keyBase64) {
+  const key = Buffer.from(keyBase64, 'base64')
+  const iv = Buffer.from(blob.iv, 'base64')
+  const authTag = Buffer.from(blob.authTag, 'base64')
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(authTag)
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(blob.cipher, 'base64')),
+    decipher.final()
+  ])
+  return decrypted.toString('utf8')
+}
+
+// ---------- WebDAV 云备份（HTTP/HTTPS + Basic 认证）----------
+function webdavRequest (method, url, user, pwd, body) {
+  return new Promise((resolve) => {
+    try {
+      let u
+      try {
+        u = new URL(url)
+      } catch (e) {
+        resolve({ ok: false, error: '地址无效' })
+        return
+      }
+      const mod = u.protocol === 'https:' ? require('node:https') : require('node:http')
+      const auth = 'Basic ' + Buffer.from((user || '') + ':' + (pwd || '')).toString('base64')
+      const headers = { Authorization: auth }
+      if (body) {
+        headers['Content-Type'] = 'application/octet-stream'
+        headers['Content-Length'] = Buffer.byteLength(body)
+      }
+      const req = mod.request(
+        u,
+        { method, timeout: 20000, headers },
+        (res) => {
+          const chunks = []
+          res.on('data', (c) => chunks.push(c))
+          res.on('end', () => {
+            resolve({
+              ok: res.statusCode >= 200 && res.statusCode < 300,
+              status: res.statusCode,
+              data: Buffer.concat(chunks).toString('utf8')
+            })
+          })
+        }
+      )
+      req.on('error', (e) => resolve({ ok: false, error: e.message }))
+      req.on('timeout', () => {
+        req.destroy()
+        resolve({ ok: false, error: '请求超时' })
+      })
+      if (body) req.write(body)
+      req.end()
+    } catch (e) {
+      resolve({ ok: false, error: e.message })
+    }
+  })
+}
+
+function webdavPut (url, user, pwd, text) {
+  return webdavRequest('PUT', url, user, pwd, text)
+}
+function webdavGet (url, user, pwd) {
+  return webdavRequest('GET', url, user, pwd)
+}
+function webdavDelete (url, user, pwd) {
+  return webdavRequest('DELETE', url, user, pwd)
+}
+
 // Base32 解码（RFC 4648），忽略空白 / 等号
 function base32Decode (str) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -300,6 +392,55 @@ window.services = {
   // AES-256-GCM 解密
   decryptData (blob, password) {
     return decryptData(blob, password)
+  },
+
+  // 派生密钥（base64）用于宽限期自动解锁
+  deriveKeyBase64 (password, saltBase64) {
+    return deriveKeyBase64(password, saltBase64)
+  },
+
+  // 使用已派生密钥加密
+  encryptDataWithKey (plaintext, saltBase64, keyBase64) {
+    return encryptDataWithKey(plaintext, saltBase64, keyBase64)
+  },
+
+  // 直接使用已派生密钥解密
+  decryptDataWithKey (blob, keyBase64) {
+    return decryptDataWithKey(blob, keyBase64)
+  },
+
+  // ---- 会话密钥文件（宽限期自动解锁，仅本地，不同步）----
+  sessionPath () {
+    return path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+  },
+  storeSession (obj) {
+    const fp = path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    fs.writeFileSync(fp, JSON.stringify(obj || {}), { encoding: 'utf-8' })
+  },
+  readSession () {
+    const fp = path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    try {
+      return JSON.parse(fs.readFileSync(fp, { encoding: 'utf-8' }))
+    } catch (e) {
+      return null
+    }
+  },
+  clearSession () {
+    const fp = path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    try {
+      fs.unlinkSync(fp)
+    } catch (e) {}
+  },
+
+  // ---- WebDAV ----
+  webdavPut (url, user, pwd, text) {
+    return webdavPut(url, user, pwd, text)
+  },
+  webdavGet (url, user, pwd) {
+    return webdavGet(url, user, pwd)
+  },
+  webdavDelete (url, user, pwd) {
+    return webdavDelete(url, user, pwd)
   },
 
   // 生成 TOTP 动态码
