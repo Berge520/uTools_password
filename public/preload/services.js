@@ -384,6 +384,14 @@ window.services = {
     return filePath
   },
 
+  // 把图片 data URL 保存到指定路径
+  saveImage (filePath, base64Url) {
+    const matchs = /^data:image\/([a-z]{1,20});base64,/i.exec(base64Url)
+    if (!matchs) return ''
+    fs.writeFileSync(filePath, base64Url.substring(matchs[0].length), { encoding: 'base64' })
+    return filePath
+  },
+
   // AES-256-GCM 加密
   encryptData (plaintext, password) {
     return encryptData(plaintext, password)

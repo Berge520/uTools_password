@@ -1,6 +1,6 @@
 {
   "name": "my-password-utools",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.13"
   },
   "devDependencies": {

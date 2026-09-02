@@ -32,6 +32,7 @@ const EntryForm = defineAsyncComponent(() => import('../components/EntryForm.vue
 const Generator = defineAsyncComponent(() => import('../components/Generator.vue'))
 const Settings = defineAsyncComponent(() => import('../components/Settings.vue'))
 const WifiImport = defineAsyncComponent(() => import('../components/WifiImport.vue'))
+const ShareDialog = defineAsyncComponent(() => import('../components/ShareDialog.vue'))
 
 const keyword = ref('')
 const moreOpen = ref(false)
@@ -42,6 +43,7 @@ const editing = ref(null)
 const showGen = ref(false)
 const showSettings = ref(false)
 const showWifi = ref(false)
+const shareEntry = ref(null) // 打开分享弹窗的条目
 const revealed = ref({})
 const selection = ref('all') // 'all' | 'uncat' | groupId
 const confirmState = ref({ open: false, title: '', message: '', confirmText: '确定', danger: false, onConfirm: null })
@@ -231,16 +233,10 @@ function toggleReveal (id) {
   revealed.value[id] = !revealed.value[id]
 }
 
-// 一键复制完整信息，方便分享给同事
-function shareEntry (entry) {
+// 打开分享弹窗（文字 / 二维码）
+function openShare (entry) {
   if (batchMode.value) return
-  const lines = [`标题：${entry.title || '未命名'}`]
-  if (entry.username) lines.push(`账号：${entry.username}`)
-  if (entry.password) lines.push(`密码：${entry.password}`)
-  if (entry.url) lines.push(`网址：${entry.url}`)
-  if (entry.notes) lines.push(`备注：${entry.notes}`)
-  window.utools.copyText(lines.join('\n'))
-  showToast('已复制完整信息，可直接分享')
+  shareEntry.value = entry
 }
 
 function openExternal (entry) {
@@ -692,7 +688,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="card-actions">
-              <button class="card-act" title="复制完整信息（分享）" @click="shareEntry(entry)">📤</button>
+              <button class="card-act" title="分享" @click="openShare(entry)">📤</button>
               <button class="card-act" title="编辑" @click="openEdit(entry)">✏️</button>
               <button class="card-act danger" title="删除" @click="onDelete(entry)">🗑</button>
             </div>
@@ -730,6 +726,7 @@ onBeforeUnmount(() => {
     <Generator v-if="showGen" @close="showGen = false" @result="onGenUse" />
     <Settings v-if="showSettings" @close="showSettings = false" />
     <WifiImport v-if="showWifi" @close="showWifi = false" />
+    <ShareDialog v-if="shareEntry" :entry="shareEntry" @close="shareEntry = null" />
     <ConfirmDialog
       v-if="confirmState.open"
       :title="confirmState.title"
