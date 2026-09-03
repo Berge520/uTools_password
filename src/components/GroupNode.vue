@@ -9,10 +9,12 @@ import ConfirmDialog from './ConfirmDialog.vue'
 const props = defineProps({
   group: { type: Object, required: true },
   depth: { type: Number, default: 0 },
-  selectedId: { type: String, default: null }
+  selectedId: { type: String, default: null },
+  batchMode: { type: Boolean, default: false },
+  selected: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'toggle-select'])
 
 const confirmState = ref({ open: false, title: '', message: '', confirmText: '确定', danger: false, onConfirm: null })
 
@@ -130,7 +132,8 @@ function onDragEnd () {
       editing,
       'drop-before': dnd.targetId === group.id && dnd.mode === 'before',
       'drop-after': dnd.targetId === group.id && dnd.mode === 'after',
-      'drop-inside': dnd.targetId === group.id && dnd.mode === 'inside'
+      'drop-inside': dnd.targetId === group.id && dnd.mode === 'inside',
+      'batch-sel': props.selected
     }"
     :style="{ paddingLeft: depth * 14 + 'px' }"
     draggable="true"
@@ -141,6 +144,7 @@ function onDragEnd () {
     @dragend="onDragEnd"
     @dblclick.stop
   >
+    <span v-if="batchMode" class="gnode-check" :class="{ on: selected }" @click.stop="emit('toggle-select', group.id)">✓</span>
     <span class="gnode-caret" :class="{ hidden: !children.length }" @click.stop="toggle">
       {{ expanded ? '▼' : '▶' }}
     </span>
@@ -178,7 +182,10 @@ function onDragEnd () {
       :group="child"
       :depth="depth + 1"
       :selected-id="selectedId"
+      :batch-mode="batchMode"
+      :selected="selected"
       @select="(id) => emit('select', id)"
+      @toggle-select="(id) => emit('toggle-select', id)"
     />
   </template>
 
@@ -236,6 +243,9 @@ function onDragEnd () {
   background: color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
+.gnode-check { width: 18px; height: 18px; border: 1px solid var(--border-2); border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; flex-shrink: 0; cursor: pointer; }
+.gnode-check.on { background: var(--primary); border-color: var(--primary); }
+.gnode.batch-sel { background: color-mix(in srgb, var(--primary) 10%, transparent); }
 .gnode-caret {
   width: 14px;
   font-size: 10px;

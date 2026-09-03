@@ -479,6 +479,38 @@ function moveGroup (id, targetId, mode) {
 }
 
 // 把分组移到顶层（parentId = null）
+// 批量删除分组：子分组与条目移到最近“未被删除”的上级（或未分组）
+function deleteGroups (ids) {
+  const set = new Set(ids)
+  if (!set.size) return
+  const gmap = {}
+  store.groups.forEach((g) => { gmap[g.id] = g })
+  function nearestAncestorId (pid) {
+    let cur = gmap[pid]
+    let p = pid
+    while (cur && set.has(p)) {
+      p = cur.parentId || null
+      cur = gmap[p]
+    }
+    return p || null
+  }
+  const remaining = store.groups.filter((g) => !set.has(g.id))
+  for (const g of remaining) {
+    if (set.has(g.parentId)) g.parentId = nearestAncestorId(g.parentId)
+  }
+  store.entries = store.entries.map((e) => set.has(e.groupId) ? { ...e, groupId: nearestAncestorId(e.groupId) } : e)
+  store.groups = remaining
+  save()
+}
+
+// 批量移动分组：把所选分组挂到目标父级下（目标若是所选之一则移到顶层，避免环）
+function moveGroups (ids, targetParentId) {
+  const set = new Set(ids)
+  if (!set.size) return
+  const gid = targetParentId || null
+  store.groups = store.groups.map((g) => set.has(g.id) ? { ...g, parentId: set.has(gid) ? null : gid } : g)
+  save()
+}
 function moveGroupToRoot (id) {
   const idx = store.groups.findIndex((g) => g.id === id)
   if (idx === -1) return
@@ -645,6 +677,43 @@ function importJson (jsonText) {
   save()
 }
 
+// 合并式导入：保留现有数据，把文件的条目追加进来，并按名称复用/新建分组
+function importMerge (jsonText) {
+  const data = JSON.parse(jsonText)
+  const fileGroups = Array.isArray(data.groups) ? data.groups : []
+  const fileEntries = Array.isArray(data) ? data : (Array.isArray(data.entries) ? data.entries : [])
+  if (!fileEntries.length && !fileGroups.length) throw new Error('文件格式不正确')
+
+  const groupByName = {}
+  store.groups.forEach((g) => { if (!(g.name in groupByName)) groupByName[g.name] = g })
+  const idMap = {}
+  let changed = false
+  fileGroups.forEach((fg) => {
+    if (!fg || !fg.name) return
+    if (!groupByName[fg.name]) {
+      const ng = { id: generateId(), name: fg.name, parentId: null }
+      groupByName[fg.name] = ng
+      store.groups.push(ng)
+      changed = true
+    }
+    idMap[fg.id] = groupByName[fg.name].id
+  })
+  if (changed) save()
+
+  const entries = fileEntries
+    .filter((e) => e && typeof e === 'object')
+    .map((e) => ({
+      title: e.title || '',
+      username: e.username || '',
+      password: e.password || '',
+      url: e.url || '',
+      notes: e.notes || '',
+      otp: e.otp,
+      groupId: e.groupId ? (idMap[e.groupId] || null) : null
+    }))
+  addEntries(entries)
+  return entries.length
+}
 export {
   store,
   initialize,
@@ -674,10 +743,13 @@ export {
   renameGroup,
   deleteGroup,
   deleteGroupDeep,
+  deleteGroups,
+  moveGroups,
   moveGroup,
   moveGroupToRoot,
   exportJson,
   exportScopeJson,
   importJson,
+  importMerge,
   generateId
 }

@@ -14,9 +14,12 @@ import {
   setEntryGroup,
   addGroup,
   moveGroupToRoot,
+  deleteGroups,
+  moveGroups,
   exportJson,
   exportScopeJson,
   importJson,
+  importMerge,
   lock
 } from '../store/vault'
 import { dnd, startDrag, clearDrag } from '../store/dnd'
@@ -33,6 +36,7 @@ const Generator = defineAsyncComponent(() => import('../components/Generator.vue
 const Settings = defineAsyncComponent(() => import('../components/Settings.vue'))
 const WifiImport = defineAsyncComponent(() => import('../components/WifiImport.vue'))
 const ShareDialog = defineAsyncComponent(() => import('../components/ShareDialog.vue'))
+const ImportDestination = defineAsyncComponent(() => import('../components/ImportDestination.vue'))
 
 const keyword = ref('')
 const moreOpen = ref(false)
@@ -44,6 +48,9 @@ const showGen = ref(false)
 const showSettings = ref(false)
 const showWifi = ref(false)
 const shareEntry = ref(null) // 打开分享弹窗的条目
+const importParsed = ref(null)
+const moveGroupMenu = ref(false)
+const importOpen = ref(false)
 const revealed = ref({})
 const selection = ref('all') // 'all' | 'uncat' | groupId
 const confirmState = ref({ open: false, title: '', message: '', confirmText: '确定', danger: false, onConfirm: null })
@@ -285,8 +292,10 @@ function onImport () {
   if (!files || !files[0]) return
   try {
     const text = window.services.readFile(files[0])
-    importJson(text)
-    showToast('导入成功')
+    const data = JSON.parse(text)
+    const entries = Array.isArray(data) ? data : (Array.isArray(data.entries) ? data.entries : [])
+    importParsed.value = { type: 'json', text, entries, groups: Array.isArray(data.groups) ? data.groups : [] }
+    importOpen.value = true
   } catch (e) {
     showToast('导入失败：' + e.message)
   }
@@ -313,22 +322,38 @@ function importBrowser () {
     showToast('未解析到任何密码，请确认是 Chrome/Edge 导出的 CSV')
     return
   }
-  const targetName = selectedName.value
-  confirmState.value = {
-    open: true,
-    title: '导入浏览器密码',
-    message: `从 CSV 解析到 ${parsed.length} 条密码，确认导入到「${targetName}」？`,
-    confirmText: '导入',
-    danger: false,
-    onConfirm: () => {
-      const groupId = selectedGroupId.value
-      const rows = parsed.map((p) => ({ title: p.title, username: p.username, password: p.password, url: p.url, groupId }))
-      addEntries(rows)
-      showToast(`已从浏览器导入 ${rows.length} 条密码`)
-    }
-  }
+  importParsed.value = { type: 'csv', text: null, entries: parsed, groups: [] }
+  importOpen.value = true
 }
 
+function onImportConfirm (dest) {
+  const meta = importParsed.value || { type: 'csv', entries: [] }
+  if (dest.mode === 'file') {
+    if (meta.type === 'json') {
+      importMerge(meta.text)
+      showToast('已按文件分组导入（保留现有并合并）')
+    } else {
+      const rows = (meta.entries || []).map((p) => ({ title: p.title || '', username: p.username || '', password: p.password || '', url: p.url || '', notes: p.notes || '', otp: p.otp, groupId: null }))
+      addEntries(rows)
+      showToast('已导入 ' + rows.length + ' 条')
+    }
+    importOpen.value = false
+    importParsed.value = null
+    return
+  }
+  let groupId = null
+  if (dest.mode === 'current') groupId = selectedGroupId.value
+  else if (dest.mode === 'group') groupId = dest.groupId || null
+  // file / all：不设分组
+  const rows = (meta.entries || []).map((p) => ({
+    title: p.title || '', username: p.username || '', password: p.password || '',
+    url: p.url || '', notes: p.notes || '', otp: p.otp, groupId
+  }))
+  addEntries(rows)
+  importOpen.value = false
+  importParsed.value = null
+  showToast(`已导入 ${rows.length} 条`)
+}
 function onLock () {
   lock()
   showToast('已锁定')
@@ -463,6 +488,55 @@ function onDocClick (e) {
   }
 }
 
+// ---------- 分组批量管理 ----------
+const groupBatch = ref(false)
+const selGroupIds = ref({}) // id -> true
+
+const selGroupCount = computed(() => Object.keys(selGroupIds.value).length)
+const groupHasSel = computed(() => selGroupCount.value > 0)
+
+function toggleGroupBatch () {
+  groupBatch.value = !groupBatch.value
+  selGroupIds.value = {}
+  moveGroupMenu.value = false
+}
+
+function toggleSelGroup (id) {
+  if (selGroupIds.value[id]) delete selGroupIds.value[id]
+  else selGroupIds.value[id] = true
+}
+function selectAllGroups () {
+  store.groups.forEach((g) => { selGroupIds.value[g.id] = true })
+}
+function invertGroups () {
+  store.groups.forEach((g) => { if (selGroupIds.value[g.id]) delete selGroupIds.value[g.id]; else selGroupIds.value[g.id] = true })
+}
+function batchDeleteGroups () {
+  const ids = Object.keys(selGroupIds.value)
+  if (!ids.length) return
+  confirmState.value = {
+    open: true,
+    title: '删除所选分组',
+    message: `确定删除选中的 ${ids.length} 个分组？其子分组与组内条目会移到上一级（不会被删除）。`,
+    confirmText: '删除',
+    danger: true,
+    onConfirm: () => {
+      deleteGroups(ids)
+      selGroupIds.value = {}
+      groupBatch.value = false
+      showToast('已删除 ' + ids.length + ' 个分组')
+    }
+  }
+}
+function batchMoveGroupsTo (parentId) {
+  const ids = Object.keys(selGroupIds.value)
+  if (!ids.length) return
+  moveGroups(ids, parentId)
+  selGroupIds.value = {}
+  groupBatch.value = false
+  moveGroupMenu.value = false
+  showToast('已移动 ' + ids.length + ' 个分组')
+}
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
@@ -479,7 +553,23 @@ onBeforeUnmount(() => {
   <div class="vault">
     <!-- 左侧：分组 -->
     <aside class="sidebar">
-      <div class="side-title">分组</div>
+      <div class="side-title">分组
+        <button class="side-batch" :class="{ on: groupBatch }" :title="groupBatch ? '退出分组批量' : '批量管理分组'" @click="toggleGroupBatch">☑</button>
+      </div>
+
+      <div v-if="groupBatch" class="group-batch-bar">
+        <span class="gb-count">已选 {{ selGroupCount }}</span>
+        <button class="btn sm" @click="selectAllGroups">全选</button>
+        <button class="btn sm" @click="invertGroups">反选</button>
+        <div class="more gb-move" @click.stop>
+          <button class="btn sm" @click="moveGroupMenu = !moveGroupMenu">移动 ▾</button>
+          <div v-if="moveGroupMenu" class="more-menu">
+            <button class="menu-item" @click="batchMoveGroupsTo(null)">📂 移到顶层</button>
+            <button v-for="g in store.groups" :key="g.id" class="menu-item" @click="batchMoveGroupsTo(g.id)">{{ g.name }}</button>
+          </div>
+        </div>
+        <button class="btn sm danger" :disabled="!groupHasSel" @click="batchDeleteGroups">删除</button>
+      </div>
 
       <div
         class="side-item"
@@ -522,7 +612,9 @@ onBeforeUnmount(() => {
             :group="g"
             :depth="0"
             :selected-id="selection"
-            @select="(id) => (selection = id)"
+            :batch-mode="groupBatch"
+            :selected="!!selGroupIds[g.id]"
+            @select="(id) => (selection = id)" @toggle-select="toggleSelGroup"
           />
         </template>
         <div v-else class="side-empty">暂无分组，双击新建</div>
@@ -725,8 +817,17 @@ onBeforeUnmount(() => {
     <EntryForm v-if="showForm" :entry="editing" :groups="store.groups" :default-group-id="selectedGroupId" @close="showForm = false" @save="onSave" />
     <Generator v-if="showGen" @close="showGen = false" @result="onGenUse" />
     <Settings v-if="showSettings" @close="showSettings = false" />
-    <WifiImport v-if="showWifi" @close="showWifi = false" />
+    <WifiImport v-if="showWifi" :default-group-id="selectedGroupId" @close="showWifi = false" />
     <ShareDialog v-if="shareEntry" :entry="shareEntry" @close="shareEntry = null" />
+    <ImportDestination
+      v-if="importOpen"
+      :title="importParsed && importParsed.type === 'json' ? '导入密码备份' : '导入浏览器密码'"
+      :count="(importParsed && importParsed.entries ? importParsed.entries.length : 0)"
+      :current-group-id="selection"
+      :current-group-name="selectedName"
+      @close="importOpen = false"
+      @confirm="onImportConfirm"
+    />
     <ConfirmDialog
       v-if="confirmState.open"
       :title="confirmState.title"
@@ -757,13 +858,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
-.side-title {
-  font-size: 12px;
-  color: var(--muted);
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  padding: 0 8px 10px;
-}
+.side-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.5px; padding: 0 0 10px; }
+.side-batch { border: 1px solid var(--border-2); background: var(--panel); color: var(--muted); width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.side-batch.on { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.group-batch-bar { display: flex; align-items: center; gap: 6px; padding: 8px; margin-bottom: 10px; border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent); background: color-mix(in srgb, var(--primary) 8%, var(--panel)); border-radius: 10px; flex-wrap: wrap; }
+.gb-count { font-size: 12px; color: var(--text-2); margin-right: auto; }
+.gb-move { position: relative; }
+.gb-move .more-menu { top: 32px; right: 0; }
 
 .side-item {
   display: flex;
