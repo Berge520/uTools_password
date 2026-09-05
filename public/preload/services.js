@@ -507,5 +507,27 @@ window.services = {
   // 诊断：返回 netsh 原始输出（解码后），便于排查
   wifiRaw () {
     return runShellDiag(IS_WIN ? 'netsh wlan show profiles' : 'echo not-windows')
+  },
+
+  // ---- 剪贴板读取（Electron clipboard；不可用时返回空串）----
+  readClipboardText () {
+    try {
+      const { clipboard } = require('electron')
+      return clipboard.readText() || ''
+    } catch (e) {
+      return ''
+    }
+  },
+
+  // 读取剪贴板图片，返回 PNG data URL；无图片返回空串
+  readClipboardImage () {
+    try {
+      const { clipboard } = require('electron')
+      const img = clipboard.readImage()
+      if (img && !img.isEmpty()) return img.toDataURL()
+      return ''
+    } catch (e) {
+      return ''
+    }
   }
 }

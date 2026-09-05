@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { decodeQrFromDataUrl, normalizeImageBase64 } from '../utils/qrScan'
 import { parseOtpauth, isValidSecret } from '../utils/totp'
+import { copyText } from '../utils/clipboard'
 
 const emit = defineEmits(['close', 'result'])
 
@@ -86,7 +87,7 @@ function useIt () {
 
 function copyRaw () {
   if (decoded.value) {
-    window.utools.copyText(decoded.value.raw)
+    copyText(decoded.value.raw, { label: '二维码内容' })
   }
 }
 

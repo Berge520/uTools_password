@@ -1,5 +1,6 @@
 // 离线二维码解码：动态加载 jsQR，不进入首屏 bundle
 // jsQR 读取的是 RGBA 像素数据 (Uint8ClampedArray)
+import { readClipboardText, readClipboardImage } from './clipboard'
 
 const MAX_DIM = 1280 // 超过该尺寸先缩小以提升解码速度
 
@@ -65,6 +66,39 @@ export async function decodeQrFromDataUrl (dataUrl) {
   }
 }
 
+/**
+ * 弹出文件选择框，选择二维码图片并离线解码
+ * @returns {Promise<string|null>} 解码文本；取消或失败返回 null
+ */
+export async function pickAndDecodeQr () {
+  const files = window.utools.showOpenDialog({
+    title: '选择二维码图片',
+    properties: ['openFile'],
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] }]
+  })
+  if (!files || !files[0]) return null
+  try {
+    const dataUrl = window.services.readImageBase64(files[0])
+    const qr = await decodeQrFromDataUrl(dataUrl)
+    return qr && qr.data ? qr.data : null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 框选屏幕区域并离线解码二维码
+ * @param {(text:string|null)=>void} done 回调；取消或未识别返回 null
+ */
+export function captureAndDecodeQr (done) {
+  window.utools.screenCapture((imgBase64) => {
+    if (!imgBase64) { done(null); return }
+    decodeQrFromDataUrl(normalizeImageBase64(imgBase64)).then((qr) => {
+      done(qr && qr.data ? qr.data : null)
+    })
+  })
+}
+
 // 规范化 uTools 截图回调可能返回的 base64 字符串 => data URL
 export function normalizeImageBase64 (input) {
   if (!input) return ''
@@ -73,4 +107,20 @@ export function normalizeImageBase64 (input) {
   if (/^https?:\/\//i.test(s)) return s
   // 纯 base64
   return `data:image/png;base64,${s}`
+}
+
+/**
+ * 读取剪贴板内容：优先文字；无文字时读取图片并自动识别其中的二维码
+ * @returns {Promise<{ok:true, text:string, from:'text'|'image'}|{ok:false, reason:'no-qr-in-image'|'empty'}>}
+ */
+export async function readClipboardContent () {
+  const t = await readClipboardText()
+  if (t && t.trim()) return { ok: true, text: t.trim(), from: 'text' }
+  const img = await readClipboardImage()
+  if (img) {
+    const qr = await decodeQrFromDataUrl(img)
+    if (qr && qr.data) return { ok: true, text: qr.data, from: 'image' }
+    return { ok: false, reason: 'no-qr-in-image' }
+  }
+  return { ok: false, reason: 'empty' }
 }

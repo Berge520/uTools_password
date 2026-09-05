@@ -41,8 +41,11 @@ function onActivity () {
 
 onMounted(() => {
   loadTheme()
-  window.utools.onPluginEnter(() => { initialize(); armIdleLock() })
-  window.utools.onPluginOut(() => { clearIdleTimer(); lock(true) })
+  // 非 uTools 环境（浏览器直接打开 dev 页面）下无此 API，跳过生命周期挂载
+  if (window.utools && window.utools.onPluginEnter) {
+    window.utools.onPluginEnter(() => { initialize(); armIdleLock() })
+    window.utools.onPluginOut(() => { clearIdleTimer(); lock(true) })
+  }
 
   initialize()
   window.addEventListener('mousemove', onActivity)

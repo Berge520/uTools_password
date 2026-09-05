@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { store, addGroup } from '../store/vault'
+import GroupPicker from './GroupPicker.vue'
 
 defineProps({
   title: { type: String, default: '导入' },
@@ -13,19 +13,9 @@ const emit = defineEmits(['close', 'confirm'])
 
 const mode = ref('all') // file | current | all | group
 const groupId = ref(null)
-const newGroupOpen = ref(false)
-const newGroupName = ref('')
 
 function confirm () {
   if (mode.value === 'group') {
-    if (newGroupOpen.value) {
-      const name = newGroupName.value.trim()
-      if (name) {
-        const g = addGroup(name, null)
-        emit('confirm', { mode: 'group', groupId: g.id })
-        return
-      }
-    }
     emit('confirm', { mode: 'group', groupId: groupId.value || null })
     return
   }
@@ -70,16 +60,7 @@ function confirm () {
         </label>
 
         <div v-if="mode === 'group'" class="imp-group">
-          <select v-model="groupId" class="input">
-            <option :value="null">未分组</option>
-            <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
-          </select>
-          <button v-if="!newGroupOpen" class="btn sm" @click="newGroupOpen = true">＋ 新建分组</button>
-        </div>
-
-        <div v-if="mode === 'group' && newGroupOpen" class="imp-new">
-          <input v-model="newGroupName" class="input mono-font" placeholder="新分组名称" autofocus @keyup.enter="confirm" />
-          <button class="btn sm primary" @click="confirm">建组并导入</button>
+          <GroupPicker v-model="groupId" />
         </div>
       </div>
 
@@ -102,9 +83,6 @@ function confirm () {
 .imp-radio span { display: flex; flex-direction: column; gap: 2px; }
 .imp-radio b { font-size: 14px; }
 .imp-radio small { font-size: 12px; color: var(--muted); }
-.imp-group { display: flex; gap: 8px; margin-left: 20px; }
-.imp-group .input { flex: 1; }
-.imp-new { display: flex; gap: 8px; margin-left: 20px; }
-.imp-new .input { flex: 1; }
+.imp-group { margin-left: 20px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 </style>

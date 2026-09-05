@@ -406,6 +406,19 @@ function findGroup (id) {
   return store.groups.find((g) => g.id === id)
 }
 
+// 把分组树拍平为带层级深度的列表（用于下拉选择等）：[{ id, name, depth }]
+function flattenGroups (groups) {
+  const list = []
+  const walk = (parentId, depth) => {
+    groups.filter((g) => (g.parentId || null) === parentId).forEach((g) => {
+      list.push({ id: g.id, name: g.name, depth })
+      walk(g.id, depth + 1)
+    })
+  }
+  walk(null, 0)
+  return list
+}
+
 function addGroup (name, parentId = null) {
   const group = { id: generateId(), name: name || '新分组', parentId: parentId || null }
   store.groups.push(group)
@@ -740,6 +753,7 @@ export {
   moveEntry,
   setEntryGroup,
   addGroup,
+  flattenGroups,
   renameGroup,
   deleteGroup,
   deleteGroupDeep,

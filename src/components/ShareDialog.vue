@@ -2,6 +2,8 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import QRCode from 'qrcode'
 import { showToast } from '../utils/toast'
+import { copyText, copyImage } from '../utils/clipboard'
+import { buildWifiPayload } from '../utils/wifi'
 
 const props = defineProps({
   entry: { type: Object, required: true }
@@ -74,11 +76,14 @@ async function renderCombined () {
 }
 
 // WiFi 直连二维码
-function escapeWifi (s) { return String(s || '').replace(/([\\;,:"])/g, '\\$1') }
 function wifiPayload () {
   const e = props.entry || {}
-  const type = e.password ? 'WPA' : 'nopass'
-  return `WIFI:T:${type};S:${escapeWifi(e.title)};P:${e.password ? escapeWifi(e.password) : ''};;`
+  return buildWifiPayload({
+    ssid: e.title,
+    password: e.password,
+    type: e.wifiType || (e.password ? 'WPA' : 'nopass'),
+    hidden: !!e.wifiHidden
+  })
 }
 async function genWifi () {
   try {
@@ -105,8 +110,8 @@ const imageTarget = () => {
   return ''
 }
 
-function copyText () { if (!text.value.trim()) return; window.utools.copyText(text.value); showToast('已复制分享文字') }
-function copyImage () { const u = imageTarget(); if (!u) return; window.utools.copyImage(u); showToast('图片已复制') }
+function copyShareText () { if (!text.value.trim()) return; copyText(text.value, { label: '分享文字' }) }
+function copyShareImage () { copyImage(imageTarget(), { label: '图片' }) }
 function saveImage () {
   const u = imageTarget(); if (!u) return
   const name = props.entry.title || 'share'
@@ -171,9 +176,9 @@ onMounted(regenAll)
 
       <div class="share-actions">
         <button class="btn" @click="emit('close')">关闭</button>
-        <button class="btn" @click="copyText">复制文字</button>
+        <button class="btn" @click="copyShareText">复制文字</button>
         <button class="btn" @click="saveTextFile">导出文件</button>
-        <button v-if="mode !== 'text'" class="btn" :disabled="!imageTarget()" @click="copyImage">复制图片</button>
+        <button v-if="mode !== 'text'" class="btn" :disabled="!imageTarget()" @click="copyShareImage">复制图片</button>
         <button v-if="mode !== 'text'" class="btn primary" :disabled="!imageTarget()" @click="saveImage">保存图片</button>
       </div>
       <div class="share-note">信息含密码，请通过可信渠道分享并及时清理。</div>

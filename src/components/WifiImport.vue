@@ -1,11 +1,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import QRCode from 'qrcode'
-import { store, addEntries, addGroup } from '../store/vault'
+import { store, addEntries } from '../store/vault'
 import ImportDestination from './ImportDestination.vue'
+import GroupPicker from './GroupPicker.vue'
+import ShareDialog from './ShareDialog.vue'
 import { showToast } from '../utils/toast'
+import { copyText } from '../utils/clipboard'
 
-defineProps({
+const props = defineProps({
   defaultGroupId: { type: String, default: null }
 })
 
@@ -16,19 +18,18 @@ const progress = ref('')
 const error = ref('')
 const list = ref([])        // [{ name, password }]
 const selected = ref({})    // name -> true
-const busy = ref(false)
-const targetGroupId = ref(null)
+const targetGroupId = ref(props.defaultGroupId || null)
 
 const importDestOpen = ref(false)
 const importPending = ref([])
 
-// WiFi 分享
-const shareWifi = ref(null)
-const shareQr = ref('')
-const shareText = ref('')
-
-const newGroupOpen = ref(false)
-const newGroupName = ref('')
+// WiFi 分享：复用通用分享弹窗（文字 / 二维码 / 直连二维码）
+const shareRow = ref(null)
+const shareEntry = computed(() =>
+  shareRow.value
+    ? { title: shareRow.value.name, password: shareRow.value.password, isWifi: true }
+    : null
+)
 
 const platform = (window.services && window.services.wifiPlatform) ? window.services.wifiPlatform() : 'unknown'
 const platformHint = {
@@ -88,23 +89,22 @@ async function load () {
 
 function copyPass (w) {
   if (!w.password) return
-  window.utools.copyText(w.password)
-  showToast('已复制')
+  copyText(w.password, { label: '密码' })
 }
 
 function importSelected () {
   const rows = list.value.filter((w) => selected.value[w.name] && w.password)
   if (!rows.length) { showToast('请至少勾选一个含密码的 WiFi'); return }
+  // 已在上方选好分组：直接导入，不再弹目的地选择
+  if (targetGroupId.value) {
+    doImport(rows, targetGroupId.value)
+    return
+  }
   importPending.value = rows
   importDestOpen.value = true
 }
 
-function onImportConfirm (dest) {
-  const rows = importPending.value
-  let gid = null
-  if (dest.mode === 'current') gid = targetGroupId.value || null
-  else if (dest.mode === 'group') gid = dest.groupId || null
-  else gid = null // file / all
+function doImport (rows, gid) {
   const entries = rows.map((w) => ({ title: w.name, username: '', password: w.password, url: '', groupId: gid, isWifi: true }))
   addEntries(entries)
   importDestOpen.value = false
@@ -113,52 +113,17 @@ function onImportConfirm (dest) {
   emit('close')
 }
 
-function createNewGroup () {
-  const name = newGroupName.value.trim()
-  if (!name) { showToast('请输入分组名称'); return }
-  const g = addGroup(name, null)
-  targetGroupId.value = g.id
-  newGroupOpen.value = false
-  newGroupName.value = ''
-  showToast('已新建分组')
+function onImportConfirm (dest) {
+  let gid = null
+  if (dest.mode === 'current') gid = targetGroupId.value || null
+  else if (dest.mode === 'group') gid = dest.groupId || null
+  else gid = null // file / all
+  doImport(importPending.value, gid)
 }
 
-// ---- WiFi 分享：复制文字 / 扫码直连二维码 ----
-function escapeWifi (s) {
-  return String(s || '').replace(/([\\;,:"])/g, '\\$1')
-}
-function wifiQrPayload (w) {
-  const type = w.password ? 'WPA' : 'nopass'
-  return `WIFI:T:${type};S:${escapeWifi(w.name)};P:${w.password ? escapeWifi(w.password) : ''};;`
-}
-async function openShare (w) {
-  shareWifi.value = w
-  shareText.value = `WiFi：${w.name}\n密码：${w.password || '（无密码）'}`
-  shareQr.value = ''
-  try {
-    shareQr.value = await QRCode.toDataURL(wifiQrPayload(w), {
-      width: 300, margin: 2, errorCorrectionLevel: 'M',
-      color: { dark: '#1c2230', light: '#ffffff' }
-    })
-  } catch (e) { showToast('二维码生成失败') }
-}
-function copyShareText () {
-  if (!shareText.value) return
-  window.utools.copyText(shareText.value)
-  showToast('已复制')
-}
-function copyShareQr () {
-  if (!shareQr.value) return
-  window.utools.copyImage(shareQr.value)
-  showToast('二维码已复制')
-}
-function saveShareQr () {
-  if (!shareQr.value) return
-  const p = window.utools.showSaveDialog({ title: '保存 WiFi 二维码', defaultPath: `${shareWifi.value && shareWifi.value.name}.png` })
-  if (!p) return
-  window.services.saveImage(p, shareQr.value)
-  showToast('已保存')
-  window.utools.shellShowItemInFolder(p)
+// ---- WiFi 分享：复用通用分享弹窗 ----
+function openShare (w) {
+  shareRow.value = w
 }
 
 onMounted(load)
@@ -167,24 +132,17 @@ onMounted(load)
 <template>
   <div class="modal-mask" @click.self="emit('close')">
     <div class="modal wifi">
-      <h3>WiFi 密码</h3>
-      <p class="wifi-sub">{{ platformHint || '读取本机已保存的 WiFi 配置，可勾选导入到插件。' }}</p>
+      <h3>本机 WiFi 密码</h3>
+      <p class="wifi-sub">{{ platformHint || '读取本机已保存的 WiFi 配置，可勾选导入到密码库。' }}</p>
 
       <div v-if="loading" class="wifi-loading">{{ progress ? '正在读取密码 ' + progress + ' …' : '正在读取…' }}</div>
       <div v-else-if="error" class="wifi-error">{{ error }}</div>
 
       <template v-else>
         <div class="wifi-group">
-          <label>预设分区</label>
-          <select v-model="targetGroupId" class="input mono-select">
-            <option :value="null">未分组</option>
-            <option v-for="g in store.groups" :key="g.id" :value="g.id">{{ g.name }}</option>
-          </select>
-          <button v-if="!newGroupOpen" class="btn sm" @click="newGroupOpen = true">＋ 新建</button>
-        </div>
-        <div v-if="newGroupOpen" class="wifi-new">
-          <input v-model="newGroupName" class="input mono-font" placeholder="新分组名称" autofocus @keyup.enter="createNewGroup" />
-          <button class="btn sm primary" @click="createNewGroup">确定</button>
+          <label>导入到分组</label>
+          <GroupPicker v-model="targetGroupId" class="wifi-group-picker" />
+          <span v-if="!targetGroupId" class="wifi-group-hint">未选分组时，导入前可选择目标</span>
         </div>
 
         <div class="wifi-bar">
@@ -212,49 +170,32 @@ onMounted(load)
 
       <div class="modal-actions">
         <button class="btn" @click="emit('close')">关闭</button>
-        <button class="btn primary" :disabled="loading || !selectedCount || busy" @click="importSelected">导入所选到插件</button>
+        <button class="btn primary" :disabled="loading || !selectedCount" @click="importSelected">导入所选到密码库</button>
       </div>
     </div>
 
     <!-- 导入目标 -->
     <ImportDestination
       v-if="importDestOpen"
-      title="导入 WiFi 密码"
+      title="导入本机 WiFi 密码"
       :count="importPending.length"
       :current-group-name="(targetGroupId && store.groups.find(g=>g.id===targetGroupId) && store.groups.find(g=>g.id===targetGroupId).name) || '未分组'"
       @close="importDestOpen = false"
       @confirm="onImportConfirm"
     />
 
-    <!-- WiFi 分享弹窗 -->
-    <div v-if="shareWifi" class="modal-mask" @click.self="shareWifi = null">
-      <div class="modal wifiq">
-        <h3>分享「{{ shareWifi.name }}」</h3>
-        <div class="wifiq-stage">
-          <img v-if="shareQr" :src="shareQr" class="wifiq-img" alt="WiFi 二维码" />
-          <div v-else class="wifiq-empty">生成中…</div>
-        </div>
-        <div class="wifiq-hint">手机相机 / 扫码器识别即可直连 WiFi（WPA/WPA2 / 免密）。</div>
-        <div class="wifiq-text mono-font">{{ shareText }}</div>
-        <div class="modal-actions">
-          <button class="btn" @click="shareWifi = null">关闭</button>
-          <button class="btn" @click="copyShareText">复制文字</button>
-          <button class="btn" :disabled="!shareQr" @click="copyShareQr">复制二维码</button>
-          <button class="btn primary" :disabled="!shareQr" @click="saveShareQr">保存二维码</button>
-        </div>
-      </div>
-    </div>
+    <!-- 分享（文字 / 二维码 / WiFi 直连） -->
+    <ShareDialog v-if="shareEntry" :entry="shareEntry" @close="shareRow = null" />
   </div>
 </template>
 
 <style scoped>
 .modal.wifi { max-width: 560px; }
-.wifi-sub, .wifiq-hint { margin: -4px 0 16px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.wifi-sub { margin: -4px 0 16px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .wifi-group { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .wifi-group label { font-size: 13px; color: var(--text-2); flex-shrink: 0; }
-.mono-select { font-family: var(--mono-font); font-variant-ligatures: none; font-feature-settings: "zero" 1; }
-.wifi-new { display: flex; gap: 8px; margin: -6px 0 12px; }
-.wifi-new .input { flex: 1; }
+.wifi-group-picker { flex: 1; min-width: 0; }
+.wifi-group-hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .wifi-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .wifi-count { font-size: 13px; color: var(--text-2); }
 .wifi-count b { color: var(--primary); }
@@ -274,10 +215,4 @@ onMounted(load)
 .wifi-loading, .wifi-error { padding: 30px 10px; text-align: center; color: var(--muted); font-size: 13px; }
 .wifi-error { color: var(--danger); white-space: pre-wrap; word-break: break-word; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
-.modal.wifiq { max-width: 360px; text-align: center; }
-.wifiq-stage { display: flex; align-items: center; justify-content: center; min-height: 220px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 10px; }
-.wifiq-img { width: 220px; height: 220px; border-radius: 8px; background: #fff; }
-.wifiq-empty { color: var(--muted); font-size: 13px; }
-.wifiq-hint { margin: 0 0 10px; }
-.wifiq-text { text-align: left; background: var(--panel-2); border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.8; white-space: pre-wrap; word-break: break-all; margin-bottom: 12px; }
 </style>

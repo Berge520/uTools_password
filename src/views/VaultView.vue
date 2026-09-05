@@ -25,6 +25,7 @@ import {
 import { dnd, startDrag, clearDrag } from '../store/dnd'
 import { theme, cycleTheme } from '../store/theme'
 import { showToast } from '../utils/toast'
+import { copyText } from '../utils/clipboard'
 import { parseBrowserCsv } from '../utils/browserCsv'
 import TotpCode from '../components/TotpCode.vue'
 import GroupNode from '../components/GroupNode.vue'
@@ -35,6 +36,8 @@ const EntryForm = defineAsyncComponent(() => import('../components/EntryForm.vue
 const Generator = defineAsyncComponent(() => import('../components/Generator.vue'))
 const Settings = defineAsyncComponent(() => import('../components/Settings.vue'))
 const WifiImport = defineAsyncComponent(() => import('../components/WifiImport.vue'))
+const WifiQr = defineAsyncComponent(() => import('../components/WifiQr.vue'))
+const ReceiveShare = defineAsyncComponent(() => import('../components/ReceiveShare.vue'))
 const ShareDialog = defineAsyncComponent(() => import('../components/ShareDialog.vue'))
 const ImportDestination = defineAsyncComponent(() => import('../components/ImportDestination.vue'))
 
@@ -47,6 +50,8 @@ const editing = ref(null)
 const showGen = ref(false)
 const showSettings = ref(false)
 const showWifi = ref(false)
+const showWifiQr = ref(false)   // WiFi 直连二维码（手动生成 / 扫码识别）
+const showReceive = ref(false) // 接收分享（文字 / 二维码 → 新增到插件）
 const shareEntry = ref(null) // 打开分享弹窗的条目
 const importParsed = ref(null)
 const moveGroupMenu = ref(false)
@@ -99,8 +104,7 @@ function batchCopy () {
   const list = store.entries.filter((e) => selectedIds.value[e.id])
   if (!list.length) return
   const lines = list.map((e) => `${e.title || ''}\t${e.username || ''}\t${e.password || ''}\t${e.url || ''}`)
-  window.utools.copyText(lines.join('\n'))
-  showToast(`已复制 ${list.length} 条（标题/账号/密码/网址）`)
+  copyText(lines.join('\n'), { label: ` ${list.length} 条（标题/账号/密码/网址）` })
 }
 
 function batchDelete () {
@@ -134,8 +138,6 @@ function onDocClickMoveMenu (e) {
     moveMenuOpen.value = false
   }
 }
-
-let copyTimer = null
 
 const rootGroups = computed(() => store.groups.filter((g) => !g.parentId))
 
@@ -226,13 +228,7 @@ function onConfirmConfirm () {
 
 function copy (text, label, ev) {
   if (batchMode.value) return
-  if (!text) return
-  window.utools.copyText(text)
-  showToast(`已复制${label}，15秒后自动清除`)
-  if (copyTimer) clearTimeout(copyTimer)
-  copyTimer = setTimeout(() => {
-    window.utools.copyText('')
-  }, 15000)
+  copyText(text, { label: label || '' })
 }
 
 function toggleReveal (id) {
@@ -283,43 +279,41 @@ function onExportView () {
   moreOpen.value = false
 }
 
-function onImport () {
-  const files = window.utools.showOpenDialog({
-    title: '导入密码备份',
-    properties: ['openFile'],
-    filters: [{ name: 'JSON', extensions: ['json'] }]
-  })
-  if (!files || !files[0]) return
-  try {
-    const text = window.services.readFile(files[0])
-    const data = JSON.parse(text)
-    const entries = Array.isArray(data) ? data : (Array.isArray(data.entries) ? data.entries : [])
-    importParsed.value = { type: 'json', text, entries, groups: Array.isArray(data.groups) ? data.groups : [] }
-    importOpen.value = true
-  } catch (e) {
-    showToast('导入失败：' + e.message)
-  }
-  moreOpen.value = false
-}
-
-function importBrowser () {
+// 导入密码：自动识别 JSON 备份 / 浏览器导出的 CSV
+function importPassword () {
   moreOpen.value = false
   const files = window.utools.showOpenDialog({
-    title: '选择浏览器导出的密码 CSV',
+    title: '导入密码（JSON 备份 / 浏览器 CSV）',
     properties: ['openFile'],
-    filters: [{ name: 'CSV', extensions: ['csv', 'txt'] }]
+    filters: [{ name: '密码文件（JSON / CSV）', extensions: ['json', 'csv', 'txt'] }]
   })
   if (!files || !files[0]) return
-  let parsed
+  let text
   try {
-    const text = window.services.readFile(files[0])
-    parsed = parseBrowserCsv(text)
+    text = window.services.readFile(files[0])
   } catch (e) {
     showToast('读取失败：' + e.message)
     return
   }
+  // 优先按 JSON 备份解析；不是合法 JSON 再按浏览器 CSV 解析
+  try {
+    const data = JSON.parse(text)
+    const entries = Array.isArray(data) ? data : (Array.isArray(data.entries) ? data.entries : [])
+    const groups = Array.isArray(data.groups) ? data.groups : []
+    if (!entries.length && !groups.length) throw new Error('备份中没有密码条目')
+    importParsed.value = { type: 'json', text, entries, groups }
+    importOpen.value = true
+    return
+  } catch (e) { /* 不是 JSON 备份，继续按 CSV 处理 */ }
+  let parsed
+  try {
+    parsed = parseBrowserCsv(text)
+  } catch (e) {
+    showToast('导入失败：请选择 JSON 备份或浏览器导出的 CSV')
+    return
+  }
   if (!parsed.length) {
-    showToast('未解析到任何密码，请确认是 Chrome/Edge 导出的 CSV')
+    showToast('未解析到任何密码，请确认是 JSON 备份或 Chrome/Edge 导出的 CSV')
     return
   }
   importParsed.value = { type: 'csv', text: null, entries: parsed, groups: [] }
@@ -675,12 +669,28 @@ onBeforeUnmount(() => {
         <div ref="moreRef" class="more">
           <button class="icon-round" title="更多" @click="moreOpen = !moreOpen">⋯</button>
           <div v-if="moreOpen" class="more-menu">
-            <button class="menu-item" @click="showGen = true; moreOpen = false">🎲 生成密码</button>
-            <button class="menu-item" @click="onExportView">📂 导出当前分组</button>
-            <button class="menu-item" @click="onExport">⬇ 导出全部</button>
-            <button class="menu-item" @click="onImport">⬆ 导入</button>
-            <button class="menu-item" @click="importBrowser">🌐 导入浏览器密码</button>
-            <button class="menu-item" @click="showWifi = true; moreOpen = false">📶 WiFi 密码</button>
+            <div class="menu-item has-sub">
+              <span>📥 导入</span><span class="sub-arrow">▸</span>
+              <div class="submenu">
+                <button class="menu-item" @click="moreOpen = false; importPassword()">📄 密码文件<span class="menu-sub">JSON / CSV</span></button>
+                <button class="menu-item" @click="moreOpen = false; showReceive = true">📩 接收分享密码</button>
+                <button class="menu-item" @click="moreOpen = false; showWifi = true">📶 读取本机 WiFi 密码</button>
+              </div>
+            </div>
+            <div class="menu-item has-sub">
+              <span>📤 导出</span><span class="sub-arrow">▸</span>
+              <div class="submenu">
+                <button class="menu-item" @click="moreOpen = false; onExportView()">📂 导出当前分组</button>
+                <button class="menu-item" @click="moreOpen = false; onExport()">⬇ 导出全部</button>
+              </div>
+            </div>
+            <div class="menu-item has-sub">
+              <span>🧰 工具</span><span class="sub-arrow">▸</span>
+              <div class="submenu">
+                <button class="menu-item" @click="moreOpen = false; showGen = true">🎲 生成密码</button>
+                <button class="menu-item" @click="moreOpen = false; showWifiQr = true">📲 生成 WiFi 二维码</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -814,10 +824,12 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 弹窗 -->
-    <EntryForm v-if="showForm" :entry="editing" :groups="store.groups" :default-group-id="selectedGroupId" @close="showForm = false" @save="onSave" />
+    <EntryForm v-if="showForm" :entry="editing" :default-group-id="selectedGroupId" @close="showForm = false" @save="onSave" />
     <Generator v-if="showGen" @close="showGen = false" @result="onGenUse" />
     <Settings v-if="showSettings" @close="showSettings = false" />
     <WifiImport v-if="showWifi" :default-group-id="selectedGroupId" @close="showWifi = false" />
+    <WifiQr v-if="showWifiQr" :default-group-id="selectedGroupId" @close="showWifiQr = false" />
+    <ReceiveShare v-if="showReceive" :default-group-id="selectedGroupId" @close="showReceive = false" />
     <ShareDialog v-if="shareEntry" :entry="shareEntry" @close="shareEntry = null" />
     <ImportDestination
       v-if="importOpen"
@@ -1182,6 +1194,43 @@ onBeforeUnmount(() => {
 
 .menu-item:hover {
   background: var(--panel-2);
+}
+
+/* ---------- 二级子菜单 ---------- */
+.menu-item.has-sub {
+  position: relative;
+  justify-content: space-between;
+  cursor: default;
+  white-space: nowrap;
+}
+.menu-item .sub-arrow {
+  margin-left: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.menu-item .menu-sub {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.submenu {
+  position: absolute;
+  right: calc(100% - 6px); /* 向左展开，与父项重叠 6px 防止鼠标移经过断连 */
+  top: -6px;
+  min-width: 180px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: 30;
+  display: none;
+  white-space: nowrap;
+  animation: menu-in 0.12s ease;
+}
+.menu-item.has-sub:hover > .submenu,
+.menu-item.has-sub:focus-within > .submenu {
+  display: block;
 }
 
 .menu-empty {

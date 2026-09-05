@@ -17,8 +17,10 @@
 - **TOTP 两步验证**：绑定 Base32 或 `otpauth://`，实时生成 6 位动态码（倒计时 + 一键复制）
 - **离线二维码识别**：上传图片或框选屏幕区域识别，自动回填密钥/账号/标题（内置 jsQR，按需加载）
 - **一键复制**：账号 / 密码 / 动态码，15 秒后自动清空剪贴板；卡片「📤」打开分享弹窗，可复制文字或生成**二维码**分享
+- **接收分享密码**：粘贴分享文字 / 选择二维码图片 / 读取剪贴板，自动解析账号、密码、网址、备注、TOTP、WiFi 直连信息（中英文标签兼容），核对编辑后一键入库
+- **WiFi 直连二维码**：手动填写或扫码回填生成 `WIFI:` 直连二维码（支持 WPA/WEP/无密码与隐藏网络），手机扫码直接连网；可保存图片或存入密码库
 - **批量管理**：勾选 / 全选 / 反选，批量删除、复制、移动到分组
-- **导入**：Chrome / Edge 导出的密码 CSV；Windows / macOS / Linux 本机 WiFi 密码查看与导入
+- **导入**：统一「密码文件」入口，JSON 备份与 Chrome / Edge 导出的 CSV 自动识别；Windows / macOS / Linux 本机 WiFi 密码读取与导入
 - **分组导出**：按当前分组（含子分组）/ 全部 / 未分组 / 收藏范围导出 JSON 备份
 - **空闲自动锁定**：主密码空闲超时（时长可配，关闭/1/5/15/30/60 分钟）自动锁定；宽限期内重进插件免输主密码
 - **密码生成器“锁定”**：生成后一键锁定，防止重新生成误覆盖
@@ -51,8 +53,8 @@ src/
   store/dnd.js     # 拖拽共享上下文
   store/member.js  # uTools 会员/数据同步状态
   store/theme.js   # 三套主题
-  utils/           # 密码生成器、Toast、二维码、浏览器 CSV
-  components/      # LockScreen/EntryForm/Generator/Settings/QrScanner/TotpCode/GroupNode/WifiImport/ConfirmDialog
+  utils/           # 密码生成器、Toast、二维码、浏览器 CSV、剪贴板、分享文字解析、WiFi payload
+  components/      # LockScreen/EntryForm/Generator/Settings/QrScanner/QrScanButtons/TotpCode/GroupNode/GroupPicker/ShareDialog/ReceiveShare/WifiQr/WifiImport/ImportDestination/ConfirmDialog
   views/VaultView.vue
   App.vue
   main.css
@@ -86,6 +88,13 @@ npm run build      # 输出到 dist/
 
 ## 🗒 更新日志
 
+- **v0.0.6**：
+  - 新增「接收分享密码」：粘贴分享文字 / 选择二维码图片 / 读取剪贴板三种来源，自动解析账号、密码、网址、备注、TOTP、WiFi 直连信息（中英文标签兼容），核对编辑后一键入库；
+  - 新增「生成 WiFi 二维码」：生成 `WIFI:` 直连二维码（WPA/WEP/无密码、隐藏网络），支持扫码回填、保存图片、一键存入密码库；手机扫码可直接连网；
+  - 新增剪贴板读取能力：剪贴板文字直接读取，剪贴板图片自动 jsQR 解码；
+  - 组件与工具统一：分组选择收敛为 `GroupPicker`（5 处复用，支持内联新建分组）、扫码按钮收敛为 `QrScanButtons`、9 处复制触点收敛为 `clipboard.js`（15 秒自动清除、复制图片不被误清、浏览器环境失败不再误报）；
+  - 「更多」菜单整理为「导入 / 导出 / 工具」二级子菜单；「导入」与「导入浏览器密码」合并为「密码文件」，JSON 备份与浏览器 CSV 自动识别；
+  - 修复：读取本机 WiFi 导入时已选分组被静默忽略、弹窗内新建分组后取消会残留空分组、WiFi 导入按钮死状态等问题。
 - **v0.0.5**：导入统一“导入目标”（普通 JSON / 浏览器 CSV / WiFi 可选 按文件分组-合并 / 当前分组 / 全部 / 指定分组+新建，修复“按文件分组”覆盖现有数据）；新增分组批量管理（全选/反选、批量移动、批量删除）；WiFi 分享升级（复制文字 / 手机扫码直连二维码）；设置“关于”新增 GitHub 建议/反馈入口（隐藏链接）。
 - **v0.0.4**：分享升级为弹窗——可复制文字或生成**二维码**（扫码查看，含保存/复制图片）。
 - **v0.0.3**：新增一键分享复制；空闲自动锁定（时长可配 + 宽限期重进免输主密码）；密码生成器“锁定”防误覆盖；WebDAV 云备份（可开关、测试连接 / 备份 / 恢复）。

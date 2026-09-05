@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { showToast } from '../utils/toast'
+import { copyText } from '../utils/clipboard'
 
 const props = defineProps({
   otp: { type: Object, required: true } // { secret, period, digits, algorithm }
@@ -38,9 +38,7 @@ function sync () {
 
 function copy () {
   if (!code.value) return
-  window.utools.copyText(code.value)
-  showToast('动态码已复制，15秒后自动清除')
-  setTimeout(() => window.utools.copyText(''), 15000)
+  copyText(code.value, { label: '动态码' })
 }
 
 onMounted(() => {

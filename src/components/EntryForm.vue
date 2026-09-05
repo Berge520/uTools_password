@@ -1,6 +1,7 @@
 <script setup>
 import { reactive, ref, computed, defineAsyncComponent, watch } from 'vue'
 import Generator from './Generator.vue'
+import GroupPicker from './GroupPicker.vue'
 import { parseOtpauth } from '../utils/totp'
 
 // 延迟加载，jsQR 不进入首屏 bundle
@@ -10,10 +11,6 @@ const props = defineProps({
   entry: {
     type: Object,
     default: null
-  },
-  groups: {
-    type: Array,
-    default: () => []
   },
   defaultGroupId: {
     type: String,
@@ -150,20 +147,17 @@ function save () {
         </div>
       </div>
 
+      <div class="field">
+        <label>分组</label>
+        <GroupPicker v-model="form.groupId" />
+      </div>
+
       <button class="advanced-toggle" @click="advanced = !advanced">
         {{ advanced ? '收起更多选项' : '更多选项（网址 / 备注 / 两步验证）' }}
         <span class="chev">{{ advanced ? '▲' : '▼' }}</span>
       </button>
 
       <template v-if="advanced">
-        <div class="field">
-          <label>分组</label>
-          <select v-model="form.groupId" class="input mono-input">
-            <option :value="null">未分组</option>
-            <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
-          </select>
-        </div>
-
         <div class="field">
           <label>网址</label>
           <input v-model="form.url" class="input mono-input" placeholder="https://…" />
