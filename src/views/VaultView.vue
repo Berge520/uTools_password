@@ -18,6 +18,7 @@ import {
   moveGroups,
   exportJson,
   exportScopeJson,
+  getScopeEntries,
   importJson,
   importMerge,
   lock
@@ -26,7 +27,7 @@ import { dnd, startDrag, clearDrag } from '../store/dnd'
 import { theme, cycleTheme } from '../store/theme'
 import { showToast } from '../utils/toast'
 import { copyText } from '../utils/clipboard'
-import { parseBrowserCsv } from '../utils/browserCsv'
+import { parseBrowserCsv, buildBrowserCsv } from '../utils/browserCsv'
 import TotpCode from '../components/TotpCode.vue'
 import GroupNode from '../components/GroupNode.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -275,6 +276,23 @@ function onExportView () {
   if (!path) return
   window.services.saveTextFile(path, exportScopeJson(scope))
   showToast(`已导出「${name}」`)
+  window.utools.shellShowItemInFolder(path)
+  moreOpen.value = false
+}
+
+// 导出为 Chrome / Edge 可导入的密码 CSV（scope：'all' 全部，其余为当前视图范围）
+function onExportCsv (scope) {
+  const isAll = scope === 'all'
+  const name = isAll ? '全部' : selectedName.value
+  const path = window.utools.showSaveDialog({
+    title: `导出浏览器密码 CSV（${name}）`,
+    defaultPath: `passwords_chrome_${Date.now()}.csv`,
+    filters: [{ name: 'CSV', extensions: ['csv'] }]
+  })
+  if (!path) return
+  const rows = getScopeEntries(scope)
+  window.services.saveTextFile(path, buildBrowserCsv(rows))
+  showToast(`已导出 ${name}（${rows.length} 条），可在 Chrome/Edge 密码页导入`)
   window.utools.shellShowItemInFolder(path)
   moreOpen.value = false
 }
@@ -680,8 +698,11 @@ onBeforeUnmount(() => {
             <div class="menu-item has-sub">
               <span>📤 导出</span><span class="sub-arrow">▸</span>
               <div class="submenu">
-                <button class="menu-item" @click="moreOpen = false; onExportView()">📂 导出当前分组</button>
-                <button class="menu-item" @click="moreOpen = false; onExport()">⬇ 导出全部</button>
+                <button class="menu-item" @click="moreOpen = false; onExportView()">📂 导出当前分组<span class="menu-sub">JSON</span></button>
+                <button class="menu-item" @click="moreOpen = false; onExport()">⬇ 导出全部<span class="menu-sub">JSON</span></button>
+                <div class="menu-sep"></div>
+                <button class="menu-item" @click="moreOpen = false; onExportCsv(selection)">🌐 当前分组 → 浏览器 CSV</button>
+                <button class="menu-item" @click="moreOpen = false; onExportCsv('all')">🌐 全部 → 浏览器 CSV</button>
               </div>
             </div>
             <div class="menu-item has-sub">
@@ -1231,6 +1252,11 @@ onBeforeUnmount(() => {
 .menu-item.has-sub:hover > .submenu,
 .menu-item.has-sub:focus-within > .submenu {
   display: block;
+}
+.menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 8px;
 }
 
 .menu-empty {

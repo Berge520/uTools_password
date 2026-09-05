@@ -656,20 +656,25 @@ function collectGroupIds (groupId) {
   return ids
 }
 
+// 按范围获取条目：'all' | 'uncat' | 'fav' | groupId（含其子分组）
+function getScopeEntries (scope) {
+  if (scope === 'uncat') return store.entries.filter((e) => !e.groupId)
+  if (scope === 'fav') return store.entries.filter((e) => e.favorite)
+  if (scope && scope !== 'all') {
+    const ids = collectGroupIds(scope)
+    return store.entries.filter((e) => ids.includes((e.groupId || null)))
+  }
+  return store.entries.slice()
+}
+
 // 按范围导出：'all' | 'uncat' | 'fav' | groupId（含其子分组）
 function exportScopeJson (scope) {
-  let entries = []
+  const entries = getScopeEntries(scope)
   let groups = []
   if (scope === 'all') {
-    entries = store.entries
     groups = store.groups
-  } else if (scope === 'uncat') {
-    entries = store.entries.filter((e) => !e.groupId)
-  } else if (scope === 'fav') {
-    entries = store.entries.filter((e) => e.favorite)
-  } else if (scope) {
+  } else if (scope && scope !== 'uncat' && scope !== 'fav') {
     const ids = collectGroupIds(scope)
-    entries = store.entries.filter((e) => ids.includes((e.groupId || null)))
     groups = store.groups.filter((g) => ids.includes(g.id))
   }
   return JSON.stringify(
@@ -763,6 +768,7 @@ export {
   moveGroupToRoot,
   exportJson,
   exportScopeJson,
+  getScopeEntries,
   importJson,
   importMerge,
   generateId
