@@ -21,6 +21,9 @@ password_vault_local.json
 *.pem
 *.key
 
+# 本地文档（仅本机留存，禁止推送）
+LOCAL_DEV.md
+
 # 日志
 logs
 *.log
