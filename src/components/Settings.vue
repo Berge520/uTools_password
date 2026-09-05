@@ -14,6 +14,7 @@ import { member, refreshMember } from '../store/member'
 import { theme, setTheme } from '../store/theme'
 import { cloud, loadCloud, saveCloud, testConnection, backupNow, restoreNow } from '../store/cloud'
 import { showToast } from '../utils/toast'
+import pkg from '../../package.json'
 
 const emit = defineEmits(['close'])
 
