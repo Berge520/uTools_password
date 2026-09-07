@@ -6,6 +6,26 @@ import { loadTheme } from './store/theme'
 import VaultView from './views/VaultView.vue'
 import LockScreen from './components/LockScreen.vue'
 
+// ---------- uTools sub-input ----------
+let subInputActive = false
+
+function setupSubInput () {
+  if (!window.utools || !window.utools.setSubInput || subInputActive) return
+  if (!store.quickSearch) return
+  subInputActive = true
+  window.utools.setSubInput(({ text }) => {
+    store.initialSearch = text || ''
+  }, '搜索密码…')
+}
+
+function removeSubInput () {
+  if (subInputActive && window.utools && window.utools.removeSubInput) {
+    window.utools.removeSubInput()
+  }
+  subInputActive = false
+  store.initialSearch = ''
+}
+
 // ---------- 空闲自动锁定 ----------
 let idleTimer = null
 let lastEvent = 0
@@ -43,8 +63,42 @@ onMounted(() => {
   loadTheme()
   // 非 uTools 环境（浏览器直接打开 dev 页面）下无此 API，跳过生命周期挂载
   if (window.utools && window.utools.onPluginEnter) {
-    window.utools.onPluginEnter(() => { initialize(); armIdleLock() })
-    window.utools.onPluginOut(() => { clearIdleTimer(); lock(true) })
+    // 插件命令词（与 plugin.json cmds 一致），进入时需排除这些词
+    const CMDS = ['我的密码', '密码管理', '密码本', 'password', '二维码', '扫码', '数据矩阵']
+    window.utools.onPluginEnter((action) => {
+      initialize()
+      armIdleLock()
+      const code = action && action.code
+      // 匹配指令入口：根据 code 路由到不同功能
+      if (code === 'find-password') {
+        // 网址匹配 → 直接搜索对应密码
+        store.initialSearch = (action.payload || '').trim()
+        setupSubInput()
+      } else if (code === 'import-file') {
+        // 文件匹配 → 触发导入
+        store.pendingAction = { type: 'import', payload: action.payload }
+      } else if (code === 'decode-qr') {
+        // 图片匹配 → 打开二维码工具箱识别
+        store.pendingAction = { type: 'decode-qr', payload: action.payload }
+      } else if (code === 'qr-tool') {
+        // 功能指令「二维码 / 扫码」→ 打开二维码工具箱
+        store.pendingAction = { type: 'open-qrtool' }
+      } else {
+        // 主功能（vault）：快速搜索
+        if (action && action.type === 'text' && action.payload && store.quickSearch) {
+          const q = action.payload.trim()
+          if (q && !CMDS.includes(q.toLowerCase())) {
+            store.initialSearch = q
+          }
+        }
+        setupSubInput()
+      }
+    })
+    window.utools.onPluginOut(() => {
+      removeSubInput()
+      clearIdleTimer()
+      lock(true)
+    })
   }
 
   initialize()
@@ -60,9 +114,15 @@ onMounted(() => {
     else armIdleLock()
   })
   watch(() => store.autoLockMinutes, () => armIdleLock())
+  // 快速搜索开关变化时，动态添加/移除 sub-input
+  watch(() => store.quickSearch, (on) => {
+    if (on) setupSubInput()
+    else removeSubInput()
+  })
 })
 
 onBeforeUnmount(() => {
+  removeSubInput()
   clearIdleTimer()
   window.removeEventListener('mousemove', onActivity)
   window.removeEventListener('keydown', onActivity)

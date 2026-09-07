@@ -339,6 +339,31 @@ function generateTotp (secret, period, digits, algorithm) {
   }
 }
 
+// HTTP GET（支持 3xx 重定向，用于版本检查等远程请求）
+function _httpGet (url, maxRedirect) {
+  return new Promise((resolve) => {
+    let mod
+    try {
+      mod = url.startsWith('https') ? require('node:https') : require('node:http')
+    } catch (e) {
+      resolve({ ok: false, error: e.message })
+      return
+    }
+    const req = mod.get(url, { timeout: 10000, headers: { 'User-Agent': 'uTools-Password-Plugin' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        if (maxRedirect > 0) return resolve(_httpGet(res.headers.location, maxRedirect - 1))
+        res.resume()
+        return resolve({ ok: false, error: 'too many redirects' })
+      }
+      let data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => resolve({ ok: res.statusCode === 200, data, status: res.statusCode }))
+    })
+    req.on('error', (err) => resolve({ ok: false, error: err.message }))
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }) })
+  })
+}
+
 // 通过 window 对象向渲染进程注入 nodejs 能力
 window.services = {
   // 读文件
@@ -529,5 +554,10 @@ window.services = {
     } catch (e) {
       return ''
     }
+  },
+
+  // ---- HTTP GET（用于版本检查等远程请求）----
+  async fetchUrl (url) {
+    return _httpGet(url, 3)
   }
 }

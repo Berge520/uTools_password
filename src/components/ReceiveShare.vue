@@ -8,7 +8,8 @@ import GroupPicker from './GroupPicker.vue'
 import QrScanButtons from './QrScanButtons.vue'
 
 const props = defineProps({
-  defaultGroupId: { type: String, default: null }
+  defaultGroupId: { type: String, default: null },
+  initialText: { type: String, default: '' } // 外部带入的待解析内容（如二维码工具箱）
 })
 const emit = defineEmits(['close'])
 
@@ -78,6 +79,11 @@ function applyContent (text, sourceLabel) {
 
 function onScanned (text, source) {
   applyContent(text, source || '二维码')
+}
+
+// 外部带入的内容（二维码工具箱「存为密码」）
+if (props.initialText) {
+  applyContent(props.initialText, '二维码')
 }
 
 async function pasteFromClipboard () {

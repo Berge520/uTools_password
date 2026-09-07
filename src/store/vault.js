@@ -1,8 +1,12 @@
 import { reactive } from 'vue'
+import { showToast } from '../utils/toast'
 import { member, refreshMember } from './member'
 
 // utools.dbStorage 存储键
 const STORAGE_KEY = 'password_vault'
+
+// uTools dbStorage 单键上限约 1MB（写超限会抛 “doc max size 1M”），此处留余量
+const DB_MAX_BYTES = 900 * 1024
 
 // 全局响应式状态
 const store = reactive({
@@ -15,7 +19,10 @@ const store = reactive({
   syncBlocked: false, // 非付费用户：云端同步被锁定
   autoLockMinutes: 5, // 主密码空闲自动锁定分钟数（0=关闭）
   unlockError: '',  // 解锁错误提示
-  bootNotice: ''    // 启动提示（如未在 uTools 环境）
+  bootNotice: '',   // 启动提示（如未在 uTools 环境）
+  quickSearch: true, // uTools 搜索框输入文字后进入插件时，自动作为搜索关键词
+  initialSearch: '',  // onPluginEnter 传入的初始搜索词（仅 quickSearch 开启时使用）
+  pendingAction: null  // 匹配指令入口的待处理动作 { type: 'import'|'decode-qr', payload }
 })
 
 let currentBlob = null  // 加密模式下的密文对象
@@ -26,8 +33,11 @@ function generateId () {
 }
 
 // 生成可跨上下文克隆的纯对象（Vue 响应式代理不能被 structuredClone，须先转纯数据）
+// 条目/分组均为原始类型字段，浅拷贝即可，避免对全量数据做 JSON 序列化深拷贝（大库卡顿主因）
 function toPlain (value) {
-  return JSON.parse(JSON.stringify(value))
+  if (Array.isArray(value)) return value.map((v) => (v && typeof v === 'object' ? { ...v } : v))
+  if (value && typeof value === 'object') return { ...value }
+  return value
 }
 
 // ---------- 自动锁定分钟数（存 localStorage）----------
@@ -49,6 +59,22 @@ function setAutoLock (minutes) {
   return m
 }
 
+// ---------- 快速搜索开关（存 localStorage）----------
+function loadQuickSearch () {
+  try {
+    return window.localStorage.getItem('password_quick_search') !== '0'
+  } catch (e) {
+    return true
+  }
+}
+
+function setQuickSearch (on) {
+  store.quickSearch = !!on
+  try {
+    window.localStorage.setItem('password_quick_search', on ? '1' : '0')
+  } catch (e) {}
+}
+
 // ---------- 同步开关（存 localStorage，本地不回传）----------
 function loadSyncFlag () {
   try {
@@ -68,8 +94,42 @@ function saveSyncFlag (on) {
 function readDbBlob () {
   return window.utools.dbStorage.getItem(STORAGE_KEY)
 }
+
+// 计算 blob 序列化后的 UTF-8 字节数（dbStorage 以字节计上限）
+function blobBytes (blob) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(blob)).length
+  } catch (e) {
+    return 0
+  }
+}
+
+// uTools dbStorage 写入一旦超过单键上限会直接抛错导致插件崩溃。
+// 遇超限时改用本地文件存储并关闭同步，保证数据不丢、不再报 “doc max size 1M”。
+function fallbackToLocal (blob) {
+  try { window.services.storeLocalData(JSON.stringify(blob)) } catch (e) {}
+  try { window.utools.dbStorage.removeItem(STORAGE_KEY) } catch (e) {}
+  if (store.syncEnabled) {
+    store.syncEnabled = false
+    saveSyncFlag(false)
+    showToast('数据量超过 uTools 同步上限（约 1MB），已切换为仅本地存储')
+  }
+}
+
+// 写入可同步后端；返回是否真的写入了 dbStorage（false 表示已自动回退到本地文件）
 function writeDbBlob (blob) {
-  window.utools.dbStorage.setItem(STORAGE_KEY, blob)
+  // 提前拦截超限数据，避免触发 LevelDB 的 “doc max size 1M” 报错
+  if (blobBytes(blob) > DB_MAX_BYTES) {
+    fallbackToLocal(blob)
+    return false
+  }
+  try {
+    window.utools.dbStorage.setItem(STORAGE_KEY, blob)
+    return true
+  } catch (e) {
+    fallbackToLocal(blob)
+    return false
+  }
 }
 function clearDbBlob () {
   window.utools.dbStorage.removeItem(STORAGE_KEY)
@@ -163,8 +223,14 @@ function setSyncEnabled (on) {
   const fromDb = store.syncEnabled
   const src = fromDb ? readDbBlob() : readFileBlob()
   if (src != null) {
-    if (on) writeDbBlob(src)
-    else writeFileBlob(src)
+    if (on) {
+      // 开启同步：若数据超过 dbStorage 上限，writeDbBlob 会自动回退本地并关闭同步
+      if (!writeDbBlob(src)) {
+        return { ok: false, blocked: true }
+      }
+    } else {
+      writeFileBlob(src)
+    }
     // 清理旧后端，避免残留一份未经切换的数据
     if (fromDb) clearDbBlob()
     else clearFileBlob()
@@ -188,6 +254,7 @@ function initialize () {
     store.groups = []
     store.syncEnabled = true
     store.autoLockMinutes = loadAutoLock()
+    store.quickSearch = loadQuickSearch()
     store.ready = true
     store.bootNotice = '未检测到 uTools 环境，请通过 uTools 插件开发工具打开本插件。'
     return
@@ -195,6 +262,7 @@ function initialize () {
 
   store.syncEnabled = loadSyncFlag()
   store.autoLockMinutes = loadAutoLock()
+  store.quickSearch = loadQuickSearch()
 
   // 根据 uTools 会员/数据同步状态约束：未开启数据同步则强制本地存储
   const m = refreshMember()
@@ -250,11 +318,12 @@ function persistPlain () {
 function persistEncrypted () {
   const payload = JSON.stringify({ entries: store.entries, groups: store.groups })
   const salt = currentBlob ? currentBlob.salt : ''
-  if (masterPassword) {
-    currentBlob = window.services.encryptData(payload, masterPassword)
-  } else if (sessionKey && salt) {
-    // 自动解锁场景（内存无主密码）：用会话密钥加密，保留原 salt 保持一致
+  // 优先复用已派生的会话密钥（与主密码等价），避免每次保存都重跑 PBKDF2（大库加密卡顿主因）
+  if (sessionKey && salt) {
     currentBlob = window.services.encryptDataWithKey(payload, salt, sessionKey)
+  } else if (masterPassword) {
+    // 首次启用 / 会话密钥尚未派生的场景：用主密码派生并生成新 salt
+    currentBlob = window.services.encryptData(payload, masterPassword)
   } else {
     // 兜底：理论上不应发生
     return
@@ -380,10 +449,12 @@ function lock (preserveSession = false) {
 function changeMasterPassword (oldPw, newPw) {
   if (!verifyPassword(oldPw)) return { ok: false, error: '当前主密码不正确' }
   masterPassword = newPw
-  save()
-  // 用新密码重派生会话密钥
+  // 先用新密码重派生会话密钥，再落盘，确保 blob 用新密钥加密（否则会写入旧密钥的旧密文）
   try {
     sessionKey = window.services.deriveKeyBase64(newPw, currentBlob.salt)
+  } catch (e) {}
+  save()
+  try {
     saveSessionKey()
   } catch (e) {}
   return { ok: true }
@@ -743,6 +814,7 @@ export {
   disableMasterPassword,
   setSyncEnabled,
   setAutoLock,
+  setQuickSearch,
   touchSession,
   tryAutoUnlock,
   getBackupBlob,

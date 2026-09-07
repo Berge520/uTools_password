@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, defineAsyncComponent, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, defineAsyncComponent, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import {
   store,
   addEntry,
@@ -28,6 +28,8 @@ import { theme, cycleTheme } from '../store/theme'
 import { showToast } from '../utils/toast'
 import { copyText } from '../utils/clipboard'
 import { parseBrowserCsv, buildBrowserCsv } from '../utils/browserCsv'
+import { decodeQrFromDataUrl, normalizeImageBase64 } from '../utils/qrScan'
+import { parseShareText } from '../utils/shareParse'
 import TotpCode from '../components/TotpCode.vue'
 import GroupNode from '../components/GroupNode.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
@@ -41,8 +43,109 @@ const WifiQr = defineAsyncComponent(() => import('../components/WifiQr.vue'))
 const ReceiveShare = defineAsyncComponent(() => import('../components/ReceiveShare.vue'))
 const ShareDialog = defineAsyncComponent(() => import('../components/ShareDialog.vue'))
 const ImportDestination = defineAsyncComponent(() => import('../components/ImportDestination.vue'))
+const QrTool = defineAsyncComponent(() => import('../components/QrTool.vue'))
 
 const keyword = ref('')
+
+// 快速搜索：uTools 搜索框 / sub-input 输入文字时同步到搜索框
+watch(() => store.initialSearch, (v) => {
+  keyword.value = v || ''
+  if (v) nextTick(() => { if (searchRef.value) searchRef.value.focus() })
+})
+
+// 从 (可能的) 文件对象 / 字符串里取出路径
+function pickImagePath (item) {
+  if (!item) return ''
+  if (typeof item === 'string') return item
+  if (typeof item === 'object') return item.path || item.filePath || item.name || ''
+  return ''
+}
+
+// 把 uTools 匹配到的图片内容规范化为 data URL
+// - img 匹配：payload 为 data URL / base64 字符串（个别版本为对象，含 data/dataUrl/base64）
+// - files 匹配：payload 为图片文件路径/文件对象数组（用 preload 读取）
+async function resolveImageSource (payload) {
+  // 1) 数组：路径字符串数组 / 文件对象数组 / base64 字符串数组
+  if (Array.isArray(payload)) {
+    if (!payload.length) return ''
+    for (const item of payload) {
+      const p = pickImagePath(item)
+      if (typeof p === 'string' && p) {
+        // 是 data URL 直接用；否则尝试按文件路径读取
+        if (/^(data:image\/|https?:\/\/)/i.test(p)) return p
+        try { return window.services.readImageBase64(p) } catch (e) { /* 继续尝试下一项 */ }
+      }
+      // 对象里可能直接带 base64 内容
+      if (item && typeof item === 'object') {
+        const b64 = item.data || item.dataUrl || item.base64
+        if (typeof b64 === 'string' && b64) return normalizeImageBase64(b64)
+      }
+    }
+    return ''
+  }
+  // 2) 字符串：data URL 直接用；像文件路径的尝试读取；否则按 base64 处理
+  if (typeof payload === 'string') {
+    const s = payload.trim()
+    if (!s) return ''
+    if (/^(data:image\/|https?:\/\/)/i.test(s)) return s
+    try {
+      const r = window.services.readImageBase64(s)
+      if (r) return r
+    } catch (e) { /* 不是文件路径，按 base64 处理 */ }
+    return normalizeImageBase64(s)
+  }
+  // 3) 对象：可能带路径，也可能直接带 base64 内容
+  if (payload && typeof payload === 'object') {
+    const p = pickImagePath(payload)
+    if (typeof p === 'string' && p) {
+      if (/^(data:image\/|https?:\/\/)/i.test(p)) return p
+      try { return window.services.readImageBase64(p) } catch (e) { /* 继续 */ }
+    }
+    const b64 = payload.data || payload.dataUrl || payload.base64
+    if (typeof b64 === 'string' && b64) return normalizeImageBase64(b64)
+  }
+  return ''
+}
+
+// 匹配指令入口：uTools 匹配到网址/文件/图片后进入插件，自动触发对应功能
+watch(() => store.pendingAction, (action) => {
+  if (!action) return
+  if (action.type === 'import') {
+    // 文件匹配：action.payload 是文件路径/文件对象数组，取第一个并规范化为路径
+    const files = action.payload
+    if (Array.isArray(files) && files.length > 0) {
+      const p = pickImagePath(files[0])
+      if (p) importFromFile(p)
+    }
+  } else if (action.type === 'decode-qr') {
+    // 图片匹配：解码后打开二维码工具箱显示结果
+    // img 匹配：payload 为 data URL / base64；files 匹配：payload 为图片文件路径数组
+    qrInitialText.value = ''
+    qrInitialFormat.value = ''
+    showQrTool.value = true
+    resolveImageSource(action.payload).then((img) => {
+      if (!img) {
+        showToast('未能读取图片内容，可在工具箱中换种方式识别')
+        return
+      }
+      decodeQrFromDataUrl(img).then((qr) => {
+        if (qr && qr.data) {
+          qrInitialText.value = qr.data
+          qrInitialFormat.value = qr.format || ''
+          showToast(`已识别${qr.format || '二维码'}`)
+        } else {
+          showToast('未识别到二维码或 Data Matrix，可在工具箱中换种方式识别')
+        }
+      })
+    })
+  } else if (action.type === 'open-qrtool') {
+    // 功能指令「二维码 / 扫码」：直接打开工具箱
+    qrInitialText.value = ''
+    qrInitialFormat.value = ''
+    showQrTool.value = true
+  }
+  store.pendingAction = null
+}, { immediate: true })
 const moreOpen = ref(false)
 const moreRef = ref(null)
 const searchRef = ref(null)
@@ -53,6 +156,10 @@ const showSettings = ref(false)
 const showWifi = ref(false)
 const showWifiQr = ref(false)   // WiFi 直连二维码（手动生成 / 扫码识别）
 const showReceive = ref(false) // 接收分享（文字 / 二维码 → 新增到插件）
+const showQrTool = ref(false)  // 二维码工具箱（生成 / 识别）
+const qrInitialText = ref('')  // 工具箱带入的识别结果
+const qrInitialFormat = ref('') // 工具箱带入的码制（QR 码 / Data Matrix）
+const receiveInitialText = ref('') // 接收分享带入的初始文本
 const shareEntry = ref(null) // 打开分享弹窗的条目
 const importParsed = ref(null)
 const moveGroupMenu = ref(false)
@@ -173,14 +280,127 @@ const sortedList = computed(() => {
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
   if (!k) return sortedList.value
-  return sortedList.value.filter((e) =>
-    [e.title, e.username, e.url, e.notes].some((v) => (v || '').toLowerCase().includes(k))
-  )
+  const out = []
+  for (const e of sortedList.value) {
+    // 逐字段短路判断，避免为每个条目额外分配数组（大库输入搜索时减少 GC 压力）
+    if (
+      (e.title && e.title.toLowerCase().includes(k)) ||
+      (e.username && e.username.toLowerCase().includes(k)) ||
+      (e.url && e.url.toLowerCase().includes(k)) ||
+      (e.notes && e.notes.toLowerCase().includes(k)) ||
+      (e.password && e.password.toLowerCase().includes(k))
+    ) {
+      out.push(e)
+    }
+  }
+  return out
 })
 
 const counts = computed(() => {
   const totp = store.entries.filter((e) => e.otp).length
   return { total: store.entries.length, totp }
+})
+
+// ---------- 列表虚拟化（大库滚动/渲染优化）----------
+// 仅渲染可视区 ± 余量的卡片，DOM 数量恒定，1000+ 条滚动不卡顿
+const listRef = ref(null)
+const listViewH = ref(600)      // 列表容器可视高度
+const scrollTop = ref(0)        // 当前滚动位置
+const heightCache = reactive({}) // id -> 实测卡片高度（不含间距）
+const cardEls = new Map()
+let listResizeObserver = null
+const EST_H = 104               // 未测量时的预估高度（与卡片最小高度一致）
+const CARD_GAP = 10             // 卡片 margin-bottom
+const OVERSCAN_PX = 300         // 视口上下额外渲染的像素余量
+
+function onListScroll () {
+  if (listRef.value) scrollTop.value = listRef.value.scrollTop
+}
+
+// ---------- 自绘滚动条 ----------
+// 原生 ::-webkit-scrollbar 在 uTools 环境被忽略，改用 JS 绘制随主题变量变化的滑块
+const sb = computed(() => {
+  const ch = layout.value.totalH || 0
+  if (ch <= listViewH.value + 1) return { show: false, h: 0, top: 0 }
+  const h = Math.max(30, Math.round((listViewH.value * listViewH.value) / ch))
+  const maxTop = listViewH.value - h
+  const top = maxTop <= 0 ? 0 : Math.round((scrollTop.value / (ch - listViewH.value)) * maxTop)
+  return { show: true, h, top }
+})
+
+const sbDragging = ref(false)
+let sbDragStartY = 0
+let sbDragStartScroll = 0
+
+function onSbDown (e) {
+  if (!sb.value.show) return
+  e.preventDefault()
+  sbDragging.value = true
+  sbDragStartY = e.clientY
+  sbDragStartScroll = scrollTop.value
+  window.addEventListener('mousemove', onSbMove)
+  window.addEventListener('mouseup', onSbUp)
+}
+
+function onSbMove (e) {
+  if (!sbDragging.value) return
+  const ch = layout.value.totalH || 0
+  const trackH = listViewH.value - sb.value.h
+  if (ch <= listViewH.value || trackH <= 0) return
+  const dy = e.clientY - sbDragStartY
+  const target = sbDragStartScroll + (dy / trackH) * (ch - listViewH.value)
+  const clamped = Math.max(0, Math.min(target, ch - listViewH.value))
+  if (listRef.value) listRef.value.scrollTop = clamped
+  scrollTop.value = clamped
+}
+
+function onSbUp () {
+  sbDragging.value = false
+  window.removeEventListener('mousemove', onSbMove)
+  window.removeEventListener('mouseup', onSbUp)
+}
+
+// 记录已渲染卡片的真实高度，用于精确计算遮垫高度与窗口范围
+function setCardRef (id, el) {
+  if (!el) { cardEls.delete(id); return }
+  cardEls.set(id, el)
+  if (heightCache[id] != null) return
+  requestAnimationFrame(() => {
+    const dom = cardEls.get(id)
+    if (dom) {
+      const h = dom.getBoundingClientRect().height
+      if (h > 0) heightCache[id] = h
+    }
+  })
+}
+
+const layout = computed(() => {
+  const list = filtered.value
+  const n = list.length
+  if (!n) return { visible: [], topPx: 0, bottomPx: 0, totalH: 0 }
+  // 各卡片高度前缀和（含卡片间距），用于 O(n) 定位窗口
+  const prefix = new Array(n + 1)
+  prefix[0] = 0
+  for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + (heightCache[list[i].id] || EST_H) + CARD_GAP
+  const totalH = prefix[n] - CARD_GAP
+  const top = Math.min(scrollTop.value, totalH)
+  let start = 0
+  while (start < n - 1 && prefix[start + 1] <= top) start++
+  let end = start
+  const limit = top + listViewH.value + OVERSCAN_PX
+  while (end < n - 1 && prefix[end + 1] < limit) end++
+  return {
+    visible: list.slice(start, end + 1),
+    topPx: Math.max(0, prefix[start]),
+    bottomPx: Math.max(0, totalH - prefix[end + 1]),
+    totalH
+  }
+})
+
+// 切换分组 / 更新搜索词 / 增删条目时，滚动回到顶部，避免定位错乱
+watch([() => selection.value, () => keyword.value, () => store.entries.length], () => {
+  scrollTop.value = 0
+  if (listRef.value) listRef.value.scrollTop = 0
 })
 
 function openAdd () {
@@ -306,9 +526,14 @@ function importPassword () {
     filters: [{ name: '密码文件（JSON / CSV）', extensions: ['json', 'csv', 'txt'] }]
   })
   if (!files || !files[0]) return
+  importFromFile(files[0])
+}
+
+// 从文件路径读取并解析密码文件（复用：菜单导入 + uTools 文件匹配）
+function importFromFile (filePath) {
   let text
   try {
-    text = window.services.readFile(files[0])
+    text = window.services.readFile(filePath)
   } catch (e) {
     showToast('读取失败：' + e.message)
     return
@@ -336,6 +561,31 @@ function importPassword () {
   }
   importParsed.value = { type: 'csv', text: null, entries: parsed, groups: [] }
   importOpen.value = true
+}
+
+// ---------- 二维码工具箱 ----------
+function openQrTool () {
+  moreOpen.value = false
+  qrInitialText.value = ''
+  qrInitialFormat.value = ''
+  showQrTool.value = true
+}
+// 工具箱识别结果 → 在密码库中搜索
+// 识别文本入库时会被拆成字段，因此先解析，用「标题/账号/网址/密码」等核心字段作搜索词，
+// 否则整段原文无法匹配到任一字段。
+function onQrSearch (text) {
+  showQrTool.value = false
+  const t = (text || '').trim()
+  if (!t) return
+  const p = parseShareText(t)
+  const q = (p && (p.title || p.username || p.url || p.password)) || t
+  store.initialSearch = q
+}
+// 工具箱识别结果 → 打开接收分享并预填，解析后存为密码
+function onQrReceive (text) {
+  showQrTool.value = false
+  receiveInitialText.value = text
+  showReceive.value = true
 }
 
 function onImportConfirm (dest) {
@@ -553,11 +803,20 @@ onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
   window.addEventListener('click', onDocClickMoveMenu)
+  // 监测列表容器尺寸，用于虚拟列表可视高度
+  if (listRef.value) {
+    listViewH.value = listRef.value.clientHeight || 600
+    listResizeObserver = new ResizeObserver(() => {
+      if (listRef.value) listViewH.value = listRef.value.clientHeight || 600
+    })
+    listResizeObserver.observe(listRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('click', onDocClick)
+  if (listResizeObserver) listResizeObserver.disconnect()
 })
 </script>
 
@@ -708,6 +967,7 @@ onBeforeUnmount(() => {
             <div class="menu-item has-sub">
               <span>🧰 工具</span><span class="sub-arrow">▸</span>
               <div class="submenu">
+                <button class="menu-item" @click="openQrTool">🔳 二维码工具箱</button>
                 <button class="menu-item" @click="moreOpen = false; showGen = true">🎲 生成密码</button>
                 <button class="menu-item" @click="moreOpen = false; showWifiQr = true">📲 生成 WiFi 二维码</button>
               </div>
@@ -740,11 +1000,14 @@ onBeforeUnmount(() => {
         <button class="btn sm" @click="exitBatch">取消</button>
       </div>
 
-      <div class="list">
+      <div class="list-wrap">
+        <div class="list" ref="listRef" @scroll="onListScroll">
         <template v-if="filtered.length">
+          <div class="list-spacer" :style="{ height: layout.topPx + 'px' }"></div>
           <div
-            v-for="entry in filtered"
+            v-for="entry in layout.visible"
             :key="entry.id"
+            :ref="el => setCardRef(entry.id, el)"
             class="card"
             :class="{
               'drop-before': dnd.type === 'entry' && dnd.targetId === entry.id && dnd.mode === 'before',
@@ -816,6 +1079,7 @@ onBeforeUnmount(() => {
               <button class="card-act danger" title="删除" @click="onDelete(entry)">🗑</button>
             </div>
           </div>
+          <div class="list-spacer" :style="{ height: layout.bottomPx + 'px' }"></div>
         </template>
 
         <template v-else>
@@ -841,6 +1105,15 @@ onBeforeUnmount(() => {
             </template>
           </div>
         </template>
+        </div>
+        <div
+          v-if="sb.show"
+          class="custom-scrollbar"
+          :class="{ dragging: sbDragging }"
+          @mousedown="onSbDown"
+        >
+          <div class="custom-scrollbar-thumb" :style="{ height: sb.h + 'px', top: sb.top + 'px' }"></div>
+        </div>
       </div>
     </div>
 
@@ -850,7 +1123,8 @@ onBeforeUnmount(() => {
     <Settings v-if="showSettings" @close="showSettings = false" />
     <WifiImport v-if="showWifi" :default-group-id="selectedGroupId" @close="showWifi = false" />
     <WifiQr v-if="showWifiQr" :default-group-id="selectedGroupId" @close="showWifiQr = false" />
-    <ReceiveShare v-if="showReceive" :default-group-id="selectedGroupId" @close="showReceive = false" />
+    <ReceiveShare v-if="showReceive" :default-group-id="selectedGroupId" :initial-text="receiveInitialText" @close="showReceive = false; receiveInitialText = ''" />
+    <QrTool v-if="showQrTool" :initial-text="qrInitialText" :initial-format="qrInitialFormat" @close="showQrTool = false" @search="onQrSearch" @receive="onQrReceive" />
     <ShareDialog v-if="shareEntry" :entry="shareEntry" @close="shareEntry = null" />
     <ImportDestination
       v-if="importOpen"
@@ -1027,7 +1301,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   font-size: 20px;
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 40%, transparent);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--primary) 40%, transparent), 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent) inset;
 }
 
 .brand-name {
@@ -1328,10 +1602,54 @@ onBeforeUnmount(() => {
 }
 
 /* ---------- 列表 ---------- */
-.list {
+.list-wrap {
+  position: relative;
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.list {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 14px;
+  padding-right: 12px;
+  /* 隐藏原生滚动条（自绘滚动条接管） */
+  scrollbar-width: none;
+}
+
+.list::-webkit-scrollbar {
+  display: none;
+}
+
+/* 自绘滚动条：原生 ::-webkit-scrollbar 在 uTools 环境失效，改用真实元素随主题变色 */
+.custom-scrollbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+}
+
+.custom-scrollbar-thumb {
+  position: absolute;
+  left: 2px;
+  width: 6px;
+  border-radius: 999px;
+  background: var(--scroll-thumb);
+  transition: background 0.16s;
+}
+
+.custom-scrollbar-thumb:hover,
+.custom-scrollbar.dragging .custom-scrollbar-thumb {
+  background: var(--scroll-thumb-hover);
+}
+
+/* 虚拟列表顶部/底部遮垫：撑起滚动高度，滚动条长度与实际内容一致 */
+.list-spacer {
+  width: 100%;
+  flex: none;
 }
 
 .card {
@@ -1359,7 +1677,7 @@ onBeforeUnmount(() => {
 .card:hover {
   box-shadow: var(--shadow);
   transform: translateY(-2px);
-  border-color: var(--border-2);
+  border-color: color-mix(in srgb, var(--primary) 26%, var(--border));
 }
 
 .card.drop-before {
@@ -1381,7 +1699,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.28), inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
 .card-main {

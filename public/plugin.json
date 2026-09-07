@@ -2,18 +2,74 @@
   "main": "index.html",
   "preload": "preload/services.js",
   "logo": "logo.png",
+  "pluginSetting": {
+    "single": true,
+    "height": 660
+  },
   "development": {
     "main": "http://127.0.0.1:5173"
   },
   "features": [
     {
       "code": "vault",
-      "explain": "我的密码：本地加密密码保险库 —— AES-256、分组拖拽、TOTP 动态码、离线扫码",
+      "explain": "本地加密密码保险库（AES-256、分组拖拽、TOTP、WiFi 二维码、离线扫码）",
       "cmds": [
         "我的密码",
-        "密码",
         "密码管理",
-        "vault"
+        "密码本",
+        "password"
+      ]
+    },
+    {
+      "code": "qr-tool",
+      "explain": "二维码 / Data Matrix 生成与识别工具箱（文字 / 网址 / WiFi 码生成，剪贴板 / 图片 / 截屏离线识别）",
+      "cmds": [
+        "二维码",
+        "扫码",
+        "数据矩阵"
+      ]
+    },
+    {
+      "code": "find-password",
+      "explain": "匹配网址，快速查找对应密码",
+      "cmds": [
+        {
+          "type": "regex",
+          "label": "查找密码",
+          "match": "/^https?:\\/\\/[^\\s/$.?#]\\S+$|^[a-z0-9][-a-z0-9]{0,62}(\\.[a-z0-9][-a-z0-9]{0,62}){1,10}(:[0-9]{1,5})?$/i",
+          "minLength": 4,
+          "maxLength": 500
+        }
+      ]
+    },
+    {
+      "code": "import-file",
+      "explain": "导入密码备份文件（JSON / CSV）",
+      "cmds": [
+        {
+          "type": "files",
+          "fileType": "file",
+          "extensions": ["json", "csv"],
+          "label": "导入密码文件",
+          "maxLength": 10
+        }
+      ]
+    },
+    {
+      "code": "decode-qr",
+      "explain": "识别图片中的二维码 / Data Matrix",
+      "cmds": [
+        {
+          "type": "img",
+          "label": "识别二维码密码"
+        },
+        {
+          "type": "files",
+          "fileType": "file",
+          "extensions": ["png", "jpg", "jpeg", "gif", "bmp", "webp"],
+          "label": "识别二维码密码",
+          "maxLength": 10
+        }
       ]
     }
   ]

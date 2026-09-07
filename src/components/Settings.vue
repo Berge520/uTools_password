@@ -8,11 +8,13 @@ import {
   lock,
   clearEntries,
   setSyncEnabled,
-  setAutoLock
+  setAutoLock,
+  setQuickSearch
 } from '../store/vault'
 import { member, refreshMember } from '../store/member'
 import { theme, setTheme } from '../store/theme'
 import { cloud, loadCloud, saveCloud, testConnection, backupNow, restoreNow } from '../store/cloud'
+import { pref, loadPref, savePref } from '../store/pref'
 import { showToast } from '../utils/toast'
 import pkg from '../../package.json'
 
@@ -23,6 +25,10 @@ const webdavMsg = ref('')
 const restoreConfirm = ref(false)
 
 function toggleCloud () {
+  if (pref.offlineMode) {
+    showToast('离线模式下云备份已停用，请先关闭离线模式')
+    return
+  }
   cloud.enabled = !cloud.enabled
   saveCloud()
   webdavMsg.value = ''
@@ -61,7 +67,7 @@ const themeOptions = [
   { key: 'sepia', label: '护眼', icon: '🍃' }
 ]
 
-onMounted(() => { refreshMember(); loadCloud() })
+onMounted(() => { loadPref(); refreshMember(); loadCloud(); checkVersion() })
 
 const localPath = computed(() => {
   try {
@@ -74,6 +80,10 @@ const localPath = computed(() => {
 })
 
 function toggleSync () {
+  if (pref.offlineMode) {
+    showToast('离线模式下数据同步已停用，请先关闭离线模式')
+    return
+  }
   if (!member.value.syncing) {
     showToast(member.value.loggedIn ? '请先在 uTools 设置中开启『数据同步』' : '请先登录 uTools 账号并开启『数据同步』（会员）')
     return
@@ -81,6 +91,8 @@ function toggleSync () {
   const res = setSyncEnabled(!store.syncEnabled)
   if (res.ok) {
     showToast(store.syncEnabled ? '已开启数据同步（备份到 uTools 云端）' : '已关闭数据同步（仅保存在本机）')
+  } else if (res.blocked) {
+    showToast('数据量超过 uTools 同步上限（约 1MB），已切换为仅本地存储')
   }
 }
 
@@ -88,6 +100,11 @@ function onAutoLockChange (e) {
   const v = parseInt(e.target.value, 10)
   setAutoLock(v)
   showToast(v === 0 ? '已关闭自动锁定' : `已设为 ${v} 分钟自动锁定`)
+}
+
+function onToggleQuickSearch () {
+  setQuickSearch(!store.quickSearch)
+  showToast(store.quickSearch ? '已开启快速搜索' : '已关闭快速搜索')
 }
 
 const showClearConfirm = ref(false)
@@ -130,8 +147,71 @@ const change = reactive({
 const repoUrl = 'https://github.com/Berge520/uTools_password'
 const APP_VERSION = pkg.version
 
+// ---- 版本检查 ----
+const versionStatus = ref('') // '' | 'off' | 'checking' | 'latest' | 'update' | 'error'
+const latestVersion = ref('')
+const updateUrl = ref('')
+
+async function checkVersion () {
+  if (!pref.versionCheck || pref.offlineMode) {
+    versionStatus.value = 'off'
+    return
+  }
+  versionStatus.value = 'checking'
+  try {
+    const url = 'https://ghfast.top/https://raw.githubusercontent.com/Berge520/uTools_password/refs/heads/main/package.json'
+    const res = await window.services.fetchUrl(url)
+    if (!res.ok || !res.data) {
+      versionStatus.value = 'error'
+      return
+    }
+    const remote = JSON.parse(res.data)
+    latestVersion.value = remote.version || ''
+    if (latestVersion.value === APP_VERSION) {
+      versionStatus.value = 'latest'
+    } else {
+      versionStatus.value = 'update'
+      updateUrl.value = 'https://www.u-tools.cn/plugins/detail/%E6%88%91%E7%9A%84%E5%AF%86%E7%A0%81/'
+    }
+  } catch (e) {
+    versionStatus.value = 'error'
+  }
+}
+
+function toggleVersionCheck () {
+  pref.versionCheck = !pref.versionCheck
+  savePref()
+  if (pref.versionCheck && !pref.offlineMode) checkVersion()
+  else versionStatus.value = 'off'
+}
+
+// 联网 / 离线主开关：离线时关闭所有需联网的功能，联网时恢复可用
+function toggleOfflineMode () {
+  pref.offlineMode = !pref.offlineMode
+  savePref()
+  if (pref.offlineMode) {
+    // WebDAV 云备份
+    if (cloud.enabled) {
+      cloud.enabled = false
+      saveCloud()
+      webdavMsg.value = ''
+    }
+    // uTools 数据同步 → 强制仅保存在本机
+    if (store.syncEnabled) setSyncEnabled(false)
+    versionStatus.value = 'off'
+    showToast('已开启离线模式，所有联网功能已停用')
+  } else {
+    if (pref.versionCheck) checkVersion()
+    showToast('已关闭离线模式，联网功能恢复可用')
+  }
+}
+
 function openRepo () {
   window.utools.shellOpenExternal(repoUrl)
+}
+
+function openUpdate () {
+  if (updateUrl.value) window.utools.shellOpenExternal(updateUrl.value)
 }
 
 function validate (pw, confirm) {
@@ -201,6 +281,11 @@ function onLock () {
         <div class="about-version">
           <span class="about-ico">🔑</span>
           <span>我的密码 <b>v{{ APP_VERSION }}</b></span>
+          <span v-if="versionStatus === 'latest'" class="ver-tag ok">✓ 最新</span>
+          <span v-else-if="versionStatus === 'update'" class="ver-tag update" @click="openUpdate">→ v{{ latestVersion }} 可更新</span>
+          <span v-else-if="versionStatus === 'off'" class="ver-tag checking">检查已关闭</span>
+          <span v-else-if="versionStatus === 'checking'" class="ver-tag checking">检查中…</span>
+          <span v-else-if="versionStatus === 'error'" class="ver-tag err" @click="checkVersion">↻ 重试</span>
         </div>
         <button class="about-row github" :title="repoUrl" @click="openRepo">
           <span class="gh-icon">
@@ -211,6 +296,47 @@ function onLock () {
           <span class="arrow">›</span>
         </button>
         <div class="about-made">由 AI 开发 · 个人项目 · AGPL-3.0</div>
+      </div>
+
+      <!-- 联网与离线 -->
+      <div class="net-section">
+        <div class="net-title">联网与离线</div>
+        <div class="net-row">
+          <div class="net-info">
+            <div class="net-name">离线模式</div>
+            <div class="net-desc">开启后停用所有需要联网的功能（版本更新检查、WebDAV 云备份、uTools 数据同步），数据仅保存在本机；关闭后恢复联网。</div>
+          </div>
+          <button class="switch" :class="{ on: pref.offlineMode }" @click="toggleOfflineMode">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+        <div class="net-row" :class="{ locked: pref.offlineMode }">
+          <div class="net-info">
+            <div class="net-name">版本更新检查</div>
+            <div class="net-desc">启动时联网检查是否有新版本（经由代理访问 GitHub）。离线模式下自动停用。</div>
+          </div>
+          <button
+            class="switch"
+            :class="{ on: pref.versionCheck }"
+            :disabled="pref.offlineMode"
+            @click="toggleVersionCheck"
+          >
+            <span class="switch-knob"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 快速搜索 -->
+      <div class="quick-search-section">
+        <div class="qs-row">
+          <div class="qs-info">
+            <div class="qs-title">快速搜索</div>
+            <div class="qs-desc">在 uTools 搜索框输入文字后进入插件，自动搜索匹配的密码；插件内顶部也会显示搜索栏。</div>
+          </div>
+          <button class="switch" :class="{ on: store.quickSearch }" @click="onToggleQuickSearch">
+            <span class="switch-knob"></span>
+          </button>
+        </div>
       </div>
 
       <!-- 自动锁定时长 -->
@@ -238,12 +364,21 @@ function onLock () {
       <div class="cloud-section">
         <div class="cloud-head">
           <div class="cloud-title">云备份（WebDAV）</div>
-          <button class="switch" :class="{ on: cloud.enabled }" @click="toggleCloud">
+          <button
+            class="switch"
+            :class="{ on: cloud.enabled }"
+            :disabled="pref.offlineMode"
+            @click="toggleCloud"
+          >
             <span class="switch-knob"></span>
           </button>
         </div>
 
-        <div v-if="!cloud.enabled" class="cloud-note">
+        <div v-if="pref.offlineMode" class="cloud-note offline">
+          离线模式下云备份已停用，开启联网后可恢复。
+        </div>
+
+        <div v-else-if="!cloud.enabled" class="cloud-note">
           开启后可将密码库备份到 WebDAV 服务器（支持坚果云 / Nextcloud / 群晖等）。
         </div>
 
@@ -317,17 +452,29 @@ function onLock () {
           <button
             class="switch"
             :class="{ on: store.syncEnabled }"
-            :disabled="!member.syncing"
+            :disabled="!member.syncing || pref.offlineMode"
             @click="toggleSync"
           >
             <span class="switch-knob"></span>
           </button>
         </div>
 
-        <div v-if="!member.syncing" class="sync-lock">
+        <div v-if="pref.offlineMode" class="sync-lock">
+          <span class="lock-ico">📴</span>
+          <span class="lock-text">离线模式已开启，云端同步停用，数据仅保存在本机。</span>
+        </div>
+
+        <div v-else-if="!member.syncing" class="sync-lock">
           <span class="lock-ico">🔒</span>
           <span class="lock-text">
             当前未开启 uTools 数据同步，云端备份不会生效（免费版仅本地离线保存）。
+          </span>
+        </div>
+
+        <div v-if="store.syncEnabled" class="sync-lock sync-warn">
+          <span class="lock-ico">⚠️</span>
+          <span class="lock-text">
+            uTools 数据库单条记录上限约 1MB，数据量过大时会自动切换为「仅本地文件」存储，云端同步将关闭。建议定期备份到 WebDAV/云端。
           </span>
         </div>
 
@@ -578,6 +725,68 @@ function onLock () {
   margin-top: 10px;
   font-size: 11px;
   color: var(--muted);
+}
+
+.ver-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 20px;
+  margin-left: 4px;
+  cursor: default;
+}
+.ver-tag.ok { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent); }
+.ver-tag.update { color: var(--primary); background: var(--primary-soft); cursor: pointer; }
+.ver-tag.checking { color: var(--muted); background: var(--panel-2); }
+.ver-tag.err { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); cursor: pointer; }
+
+/* 快速搜索 */
+.quick-search-section {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.qs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.qs-info { min-width: 0; }
+.qs-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.qs-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* 联网与离线 */
+.net-section {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.net-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.net-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.net-row:last-child {
+  margin-bottom: 0;
+}
+.net-info { min-width: 0; }
+.net-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.net-desc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.net-row.locked { opacity: 0.6; }
+.cloud-note.offline {
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, var(--panel));
+  padding: 10px 12px;
+  border-radius: 8px;
 }
 
 .theme-label {
