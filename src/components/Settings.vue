@@ -13,7 +13,7 @@ import {
 } from '../store/vault'
 import { member, refreshMember } from '../store/member'
 import { theme, setTheme } from '../store/theme'
-import { cloud, loadCloud, saveCloud, testConnection, backupNow, restoreNow } from '../store/cloud'
+import { cloud, loadCloud, saveCloud, testConnection, backupNow, restoreNow, previewRemote, listRemoteBackups, exportLocal } from '../store/cloud'
 import { pref, loadPref, savePref } from '../store/pref'
 import { showToast } from '../utils/toast'
 import pkg from '../../package.json'
@@ -23,6 +23,11 @@ const emit = defineEmits(['close'])
 const webdavBusy = ref(false)
 const webdavMsg = ref('')
 const restoreConfirm = ref(false)
+const backupConfirm = ref(false)
+const restorePreview = ref(null)
+const restoreList = ref([])          // 云端备份列表 [{name,date,legacy}]
+const restoreSelecting = ref(false)  // 是否处于版本选择阶段
+const selectedBackup = ref(null)     // 选中的备份文件名
 
 function toggleCloud () {
   if (pref.offlineMode) {
@@ -42,23 +47,93 @@ async function onWebdavTest () {  saveCloud()
   webdavMsg.value = r.ok ? '✅ 连接成功' : ('❌ ' + (r.error || '失败'))
 }
 
+function onWebdavBackupClick () {
+  // 明文安全增强：未开启主密码时，备份前先警告（防止明文密码直接上传云端）
+  if (!store.secured) {
+    backupConfirm.value = true
+    webdavMsg.value = ''
+    return
+  }
+  onWebdavBackup()
+}
+
 async function onWebdavBackup () {
-  saveCloud()
+  backupConfirm.value = false
   webdavBusy.value = true
   webdavMsg.value = ''
   const r = await backupNow()
   webdavBusy.value = false
-  webdavMsg.value = r.ok ? '✅ 备份成功' : ('❌ ' + (r.error || '失败'))
+  if (!r.ok) {
+    webdavMsg.value = '❌ ' + (r.error || '失败')
+  } else if (r.plain) {
+    webdavMsg.value = '✅ 备份成功（数据为明文，未加密上传；云端已保留最近 ' + (r.kept || 3) + ' 份）'
+  } else {
+    webdavMsg.value = '✅ 备份成功（已加密上传；云端已保留最近 ' + (r.kept || 3) + ' 份）'
+  }
+}
+
+// 点击「从云端恢复」：先拉取云端备份列表，弹出版本选择，选中后再预览并确认
+async function openRestoreConfirm () {
+  webdavMsg.value = ''
+  restoreConfirm.value = true
+  restoreSelecting.value = true
+  restorePreview.value = null
+  selectedBackup.value = null
+  webdavBusy.value = true
+  const r = await listRemoteBackups()
+  webdavBusy.value = false
+  if (!r.ok) {
+    restoreConfirm.value = false
+    webdavMsg.value = '❌ ' + (r.error || '失败')
+  } else if (!r.backups.length) {
+    restoreConfirm.value = false
+    webdavMsg.value = '❌ 云端暂无备份'
+  } else {
+    restoreList.value = r.backups
+  }
+}
+
+// 用户选中某个备份版本后：读取该版本摘要，进入预览确认阶段
+async function selectBackup (name) {
+  webdavBusy.value = true
+  const r = await previewRemote(name)
+  webdavBusy.value = false
+  if (!r.ok) {
+    webdavMsg.value = '❌ ' + (r.error || '失败')
+    return
+  }
+  selectedBackup.value = name
+  restorePreview.value = r
+  restoreSelecting.value = false
+}
+
+// 从预览阶段返回版本选择
+function backToList () {
+  restoreSelecting.value = true
+  restorePreview.value = null
+  selectedBackup.value = null
 }
 
 async function onWebdavRestore () {
+  restoreConfirm.value = false
   webdavBusy.value = true
   webdavMsg.value = ''
-  const r = await restoreNow()
+  const r = await restoreNow(selectedBackup.value)
   webdavBusy.value = false
-  restoreConfirm.value = false
   webdavMsg.value = r.ok ? ('✅ 已从云端恢复' + (r.encrypted ? '（加密数据，需输入主密码）' : '')) : ('❌ ' + (r.error || '失败'))
   if (r.ok) emit('close')
+}
+
+async function onWebdavExport () {
+  webdavBusy.value = true
+  webdavMsg.value = ''
+  const r = await exportLocal()
+  webdavBusy.value = false
+  if (r.ok) {
+    webdavMsg.value = '✅ 已导出到本地：' + r.path
+  } else if (!r.canceled) {
+    webdavMsg.value = '❌ ' + (r.error || '导出失败')
+  }
 }
 
 const themeOptions = [
@@ -408,20 +483,59 @@ function onLock () {
 
           <div class="cloud-actions">
             <button class="btn sm" :disabled="webdavBusy" @click="onWebdavTest">测试连接</button>
-            <button class="btn sm primary" :disabled="webdavBusy" @click="onWebdavBackup">立即备份</button>
-            <button class="btn sm" :disabled="webdavBusy || !store.entries.length" @click="restoreConfirm = true">从云端恢复</button>
+            <button class="btn sm primary" :disabled="webdavBusy" @click="onWebdavBackupClick">立即备份</button>
+            <button class="btn sm" :disabled="webdavBusy" @click="openRestoreConfirm">从云端恢复</button>
+            <button class="btn sm" :disabled="webdavBusy" @click="onWebdavExport">导出本地备份</button>
           </div>
           <div v-if="webdavMsg" class="cloud-msg">{{ webdavMsg }}</div>
           <div class="cloud-note">
             备份内容：{{ store.secured ? '已加密（AES-256）' : '明文（建议先开启主密码）' }}。地址、账号、密码仅保存在本机。
           </div>
 
-          <div v-if="restoreConfirm" class="cloud-restore-confirm">
-            <p>将用云端备份<b>覆盖</b>当前所有数据，此操作不可撤销。确认继续？</p>
+          <div v-if="backupConfirm" class="cloud-restore-confirm">
+            <p>当前数据为<b>明文</b>（未开启主密码），备份将把明文密码直接上传到 WebDAV，存在泄露风险。确认继续？</p>
             <div class="modal-actions">
-              <button class="btn" @click="restoreConfirm = false">取消</button>
-              <button class="btn red" @click="onWebdavRestore">覆盖恢复</button>
+              <button class="btn" @click="backupConfirm = false">取消</button>
+              <button class="btn red" @click="onWebdavBackup">仍要备份</button>
             </div>
+          </div>
+
+          <div v-if="restoreConfirm" class="cloud-restore-confirm">
+            <!-- 阶段一：选择云端备份版本 -->
+            <template v-if="restoreSelecting">
+              <p>选择要恢复的云端备份版本：</p>
+              <div v-if="!restoreList.length" class="cloud-preview-warn">云端暂无备份</div>
+              <div v-else class="cloud-version-list">
+                <div
+                  v-for="b in restoreList"
+                  :key="b.name"
+                  class="cloud-version-item"
+                  @click="selectBackup(b.name)"
+                >
+                  <span class="cloud-version-name mono">{{ b.name }}</span>
+                  <span class="cloud-version-time">{{ b.date ? new Date(b.date).toLocaleString() : (b.legacy ? '旧版本文件' : '未知时间') }}</span>
+                </div>
+              </div>
+              <div class="modal-actions">
+                <button class="btn" @click="restoreConfirm = false">取消</button>
+              </div>
+            </template>
+
+            <!-- 阶段二：预览并确认恢复 -->
+            <template v-else>
+              <p>即将用云端备份<b>覆盖</b>当前所有数据，此操作不可撤销，请确认：</p>
+              <div v-if="restorePreview" class="cloud-preview">
+                <div v-if="restorePreview.file" class="cloud-preview-row"><span>备份文件</span><span class="mono">{{ restorePreview.file }}</span></div>
+                <div class="cloud-preview-row"><span>备份时间</span><span>{{ restorePreview.exportedAt ? new Date(restorePreview.exportedAt).toLocaleString() : '未知' }}</span></div>
+                <div class="cloud-preview-row"><span>内容</span><span>{{ restorePreview.encrypted ? '已加密（AES-256），恢复后需输入主密码' : ('明文，共 ' + (restorePreview.count ?? 0) + ' 条') }}</span></div>
+                <div v-if="!restorePreview.hasChecksum" class="cloud-preview-warn">该备份未包含校验和，无法验证完整性</div>
+              </div>
+              <p v-else>正在读取云端备份信息…</p>
+              <div class="modal-actions">
+                <button class="btn" @click="backToList">返回</button>
+                <button class="btn red" :disabled="!restorePreview" @click="onWebdavRestore">覆盖恢复</button>
+              </div>
+            </template>
           </div>
         </template>
       </div>
@@ -1074,6 +1188,75 @@ function onLock () {
 
 .cloud-restore-confirm .modal-actions {
   justify-content: flex-end;
+}
+
+.cloud-preview {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.cloud-preview-row {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  line-height: 1.6;
+}
+
+.cloud-preview-row > span:first-child {
+  flex: 0 0 64px;
+  color: var(--muted);
+}
+
+.cloud-preview-warn {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.cloud-version-list {
+  margin: 0 0 12px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.cloud-version-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.14s;
+}
+
+.cloud-version-item:hover {
+  background: var(--panel-2);
+}
+
+.cloud-version-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.cloud-version-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* 危险操作 */

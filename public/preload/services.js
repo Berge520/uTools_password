@@ -304,6 +304,91 @@ function webdavMkcol (url, user, pwd) {
   return webdavRequest('MKCOL', url, user, pwd)
 }
 
+// 计算字符串 SHA-256 十六进制摘要（用于备份完整性校验）
+function sha256 (text) {
+  if (typeof text !== 'string') text = JSON.stringify(text)
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+// 弹出保存对话框并写入文本；用户取消返回 { ok:false, canceled:true }
+async function saveFileDialog (defaultName, text) {
+  try {
+    if (window.utools && typeof window.utools.showSaveDialog === 'function') {
+      const savePath = await window.utools.showSaveDialog({
+        title: '导出备份',
+        defaultPath: path.join(window.utools.getPath('downloads'), defaultName),
+        buttonLabel: '保存',
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      })
+      if (!savePath) return { ok: false, canceled: true }
+      fs.writeFileSync(savePath, text, { encoding: 'utf-8' })
+      return { ok: true, path: savePath }
+    }
+    // 兜底：无保存对话框 API 时直接写入下载目录
+    const fp = path.join(window.utools.getPath('downloads'), defaultName)
+    fs.writeFileSync(fp, text, { encoding: 'utf-8' })
+    return { ok: true, path: fp }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
+// 列出目录下的条目（PROPFIND Depth:1），用于多版本备份的列举与清理
+function webdavPropfind (url, user, pwd) {
+  return new Promise((resolve) => {
+    try {
+      let u
+      try {
+        u = new URL(url)
+      } catch (e) {
+        resolve({ ok: false, error: '地址无效' })
+        return
+      }
+      const secure = u.protocol === 'https:'
+      const mod = secure ? require('node:https') : require('node:http')
+      const auth = 'Basic ' + Buffer.from((user || '') + ':' + (pwd || '')).toString('base64')
+      const body = '<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:getlastmodified/><d:getcontentlength/></d:prop></d:propfind>'
+      const headers = {
+        Authorization: auth,
+        Depth: '1',
+        'Content-Type': 'application/xml; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body)
+      }
+      const req = mod.request(
+        {
+          protocol: u.protocol,
+          hostname: u.hostname,
+          port: u.port || (secure ? 443 : 80),
+          path: u.pathname + u.search,
+          method: 'PROPFIND',
+          timeout: 20000,
+          headers
+        },
+        (res) => {
+          const chunks = []
+          res.on('data', (c) => chunks.push(c))
+          res.on('end', () => {
+            resolve({
+              ok: res.statusCode >= 200 && res.statusCode < 300,
+              status: res.statusCode,
+              xml: Buffer.concat(chunks).toString('utf8')
+            })
+          })
+        }
+      )
+      req.on('error', (e) => resolve({ ok: false, error: e.message }))
+      req.on('timeout', () => {
+        req.destroy()
+        resolve({ ok: false, error: '请求超时' })
+      })
+      if (body) req.write(body)
+      req.end()
+    } catch (e) {
+      resolve({ ok: false, error: e.message })
+    }
+  })
+}
+
 // Base32 解码（RFC 4648），忽略空白 / 等号
 function base32Decode (str) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -489,6 +574,15 @@ window.services = {
   },
   webdavMkcol (url, user, pwd) {
     return webdavMkcol(url, user, pwd)
+  },
+  webdavPropfind (url, user, pwd) {
+    return webdavPropfind(url, user, pwd)
+  },
+  sha256 (text) {
+    return sha256(text)
+  },
+  saveFileDialog (defaultName, text) {
+    return saveFileDialog(defaultName, text)
   },
 
   // 生成 TOTP 动态码
