@@ -38,9 +38,33 @@ export function buildUrl () {
   return [base, p, name].filter(Boolean).join('/')
 }
 
+function buildBaseUrl () {
+  let base = (cloud.url || '').trim()
+  if (!base) return ''
+  if (!/^https?:\/\//i.test(base)) base = 'https://' + base
+  return base.replace(/\/+$/, '')
+}
+
+// 逐级创建 WebDAV 目录（自动创建父目录，已存在则容错）
+async function ensureRemoteDir () {
+  const base = buildBaseUrl()
+  const segs = (cloud.path || '').split('/').map(s => s.trim()).filter(Boolean)
+  for (let i = 1; i <= segs.length; i++) {
+    const dirUrl = base + '/' + segs.slice(0, i).join('/')
+    const r = await window.services.webdavMkcol(dirUrl, cloud.user, cloud.pass)
+    if (!r.ok) {
+      // 无 status 表示网络级错误（无法连接/超时），视为失败；405/301/409 等表示目录已存在，继续
+      if (!r.status) return r
+    }
+  }
+  return { ok: true }
+}
+
 export async function testConnection () {
   const url = buildUrl()
   if (!url) return { ok: false, error: '请先填写服务器地址' }
+  const dr = await ensureRemoteDir()
+  if (!dr.ok) return { ok: false, error: '连接失败：' + (dr.error || ('HTTP ' + (dr.status || 0))) }
   const r = await window.services.webdavPut(url, cloud.user, cloud.pass, '__ping__' + Date.now())
   // 尝试清理测试文件
   if (r.ok) window.services.webdavDelete(url, cloud.user, cloud.pass)
@@ -59,6 +83,8 @@ export async function backupNow () {
     exportedAt: new Date().toISOString(),
     blob
   })
+  const dr = await ensureRemoteDir()
+  if (!dr.ok) return { ok: false, error: '上传失败：' + (dr.error || ('HTTP ' + (dr.status || 0))) }
   const r = await window.services.webdavPut(url, cloud.user, cloud.pass, payload)
   return r.ok ? { ok: true } : { ok: false, error: '上传失败：' + (r.error || ('HTTP ' + (r.status || 0))) }
 }

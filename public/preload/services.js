@@ -247,16 +247,25 @@ function webdavRequest (method, url, user, pwd, body) {
         resolve({ ok: false, error: '地址无效' })
         return
       }
-      const mod = u.protocol === 'https:' ? require('node:https') : require('node:http')
+      const secure = u.protocol === 'https:'
+      const mod = secure ? require('node:https') : require('node:http')
       const auth = 'Basic ' + Buffer.from((user || '') + ':' + (pwd || '')).toString('base64')
       const headers = { Authorization: auth }
       if (body) {
         headers['Content-Type'] = 'application/octet-stream'
         headers['Content-Length'] = Buffer.byteLength(body)
       }
+      // 用单个 options 对象发起请求（避免 uTools 预加载环境对 node:http/https 包装后 url+options 重载失效）
       const req = mod.request(
-        u,
-        { method, timeout: 20000, headers },
+        {
+          protocol: u.protocol,
+          hostname: u.hostname,
+          port: u.port || (secure ? 443 : 80),
+          path: u.pathname + u.search,
+          method,
+          timeout: 20000,
+          headers
+        },
         (res) => {
           const chunks = []
           res.on('data', (c) => chunks.push(c))
@@ -290,6 +299,9 @@ function webdavGet (url, user, pwd) {
 }
 function webdavDelete (url, user, pwd) {
   return webdavRequest('DELETE', url, user, pwd)
+}
+function webdavMkcol (url, user, pwd) {
+  return webdavRequest('MKCOL', url, user, pwd)
 }
 
 // Base32 解码（RFC 4648），忽略空白 / 等号
@@ -474,6 +486,9 @@ window.services = {
   },
   webdavDelete (url, user, pwd) {
     return webdavDelete(url, user, pwd)
+  },
+  webdavMkcol (url, user, pwd) {
+    return webdavMkcol(url, user, pwd)
   },
 
   // 生成 TOTP 动态码
