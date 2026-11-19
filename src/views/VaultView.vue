@@ -799,6 +799,11 @@ function onGlobalKeydown (e) {
   }
   if (mod && key.toLowerCase() === 'l') {
     e.preventDefault()
+    // Ctrl+L 可能被 Chromium 拦截，Ctrl+Shift+L 作为备选（mod 判断不含 shift，两者都走这里）
+    if (!store.secured) {
+      showToast('未设置主密码，无需锁定')
+      return
+    }
     lock()
     showToast('已锁定')
     return

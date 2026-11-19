@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import VaultView from '../../src/views/VaultView.vue'
 import { store } from '../../src/store/vault'
+import { toast } from '../../src/utils/toast'
 
 // 组件级测试：键盘导航与快捷键必须只在实际生效的场景触发。
 // 注意：不模拟真实解锁/密码输入，仅验证列表与快捷键的接线逻辑。
@@ -85,11 +86,21 @@ test('输入框中的方向键不触发列表导航', async () => {
 })
 
 test('Ctrl+L 立即锁定', async () => {
+  store.secured = true
   mountView()
   await nextTick()
   pressKey('l', { ctrlKey: true })
   expect(store.locked).toBe(true)
   expect(window.services.clearSession).toHaveBeenCalled()
+})
+
+test('未设置主密码时 Ctrl+L 不锁定并提示', async () => {
+  store.secured = false
+  mountView()
+  await nextTick()
+  pressKey('l', { ctrlKey: true })
+  expect(store.locked).toBe(false, '没有主密码时不应进入锁定态')
+  expect(toast.message).toBe('未设置主密码，无需锁定')
 })
 
 test('Ctrl+N 打开新建表单', async () => {
