@@ -95,3 +95,27 @@ test('恢复明文备份后收藏项在前', async () => {
   v.saveBlobFromBackup(plainBlob(SCATTERED))
   assert.deepEqual(ids(v), ['f', 'n'])
 })
+
+// ---- 分组移动的拒绝必须可反馈 ----
+
+test('moveGroup 成环时返回 false，正常移动返回 true', async () => {
+  const { v } = await freshVault({ db: { [KEY]: plainBlob([], [
+    { id: 'p', name: '父', parentId: null },
+    { id: 'c', name: '子', parentId: 'p' },
+    { id: 'x', name: '独立', parentId: null }
+  ]) } })
+  await v.initialize()
+  assert.equal(v.moveGroup('p', 'c', 'before'), false, '父组移到子组之前会成环')
+  assert.equal(v.moveGroup('p', 'c', 'inside'), false, '父组挂到子组之下会成环')
+  assert.equal(v.moveGroup('x', 'p', 'inside'), true, '正常移动应成功')
+})
+
+test('moveGroups 成环时返回 false', async () => {
+  const { v } = await freshVault({ db: { [KEY]: plainBlob([], [
+    { id: 'p', name: '父', parentId: null },
+    { id: 'c', name: '子', parentId: 'p' }
+  ]) } })
+  await v.initialize()
+  assert.equal(v.moveGroups(['p'], 'c'), false)
+  assert.equal(v.moveGroups(['c'], 'p'), true)
+})

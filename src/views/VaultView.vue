@@ -877,11 +877,11 @@ function batchDeleteGroups () {
 function batchMoveGroupsTo (parentId) {
   const ids = Object.keys(selGroupIds.value)
   if (!ids.length) return
-  moveGroups(ids, parentId)
+  const ok = moveGroups(ids, parentId)
   selGroupIds.value = {}
   groupBatch.value = false
   moveGroupMenu.value = false
-  showToast('已移动 ' + ids.length + ' 个分组')
+  showToast(ok === false ? '不能把分组移动到它自己的子分组里' : ('已移动 ' + ids.length + ' 个分组'))
 }
 onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)

@@ -116,8 +116,8 @@ function onDrop (e) {
     setEntryGroup(dnd.id, props.group.id)
     showToast('已移动到分组')
   } else if (dnd.type === 'group') {
-    moveGroup(dnd.id, props.group.id, mode)
-    showToast('已调整分组')
+    const ok = moveGroup(dnd.id, props.group.id, mode)
+    showToast(ok === false ? '不能把分组移动到它自己的子分组里' : '已调整分组')
   }
   clearDrag()
 }

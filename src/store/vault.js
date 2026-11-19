@@ -630,10 +630,11 @@ function deleteGroupDeep (id) {
 }
 
 // 变更分组层级：mode = 'before' | 'after' | 'inside'
+// 返回 false 表示因成环被拒绝（调用方应给出提示），true 表示已移动
 function moveGroup (id, targetId, mode) {
   const idx = store.groups.findIndex((g) => g.id === id)
-  if (idx === -1) return
-  if (id === targetId) return
+  if (idx === -1) return false
+  if (id === targetId) return false
   // before/after 会让 item 成为 target 的同级；若 target 在 item 的子孙链上，
   // item.parentId 将指向自己的子孙 → 成环（分组从树上消失，遍历死循环）
   if (mode !== 'inside') {
@@ -641,7 +642,7 @@ function moveGroup (id, targetId, mode) {
     const seen = new Set()
     let cursor = findGroup(targetId)
     while (cursor && !seen.has(cursor.id)) {
-      if (cursor.id === id) return
+      if (cursor.id === id) return false
       seen.add(cursor.id)
       cursor = findGroup(cursor.parentId)
     }
@@ -653,24 +654,28 @@ function moveGroup (id, targetId, mode) {
     item.parentId = targetId
     store.groups.push(item)
     // 阻止循环引用：若 target 的祖先包含 item，回退
+    let cycle = false
     const seen = new Set()
     let cursor = findGroup(targetId)
     while (cursor && !seen.has(cursor.id)) {
       seen.add(cursor.id)
       if (cursor.id === item.id) {
         item.parentId = null
+        cycle = true
         break
       }
       cursor = findGroup(cursor.parentId)
     }
-  } else {
-    const tIdx = store.groups.findIndex((g) => g.id === targetId)
-    const target = store.groups[tIdx]
-    item.parentId = target ? target.parentId : null
-    // 防止把自己移到自己的子孙下（before/after 一级不做深层校验，inside 已处理）
-    store.groups.splice(mode === 'before' ? tIdx : tIdx + 1, 0, item)
+    save()
+    return !cycle
   }
+  const tIdx = store.groups.findIndex((g) => g.id === targetId)
+  const target = store.groups[tIdx]
+  item.parentId = target ? target.parentId : null
+  // 防止把自己移到自己的子孙下（before/after 一级不做深层校验，inside 已处理）
+  store.groups.splice(mode === 'before' ? tIdx : tIdx + 1, 0, item)
   save()
+  return true
 }
 
 // 把分组移到顶层（parentId = null）
@@ -703,22 +708,24 @@ function deleteGroups (ids) {
 }
 
 // 批量移动分组：把所选分组挂到目标父级下（目标若是所选之一则移到顶层，避免环）
+// 返回 false 表示因成环被拒绝（调用方应给出提示）
 function moveGroups (ids, targetParentId) {
   const set = new Set(ids)
-  if (!set.size) return
+  if (!set.size) return false
   const gid = targetParentId || null
   // 目标若是被移分组的子孙，挂上去会成环 → 拒绝整个操作
   if (gid && !set.has(gid)) {
     const seen = new Set()
     let cursor = findGroup(gid)
     while (cursor && !seen.has(cursor.id)) {
-      if (set.has(cursor.id)) return
+      if (set.has(cursor.id)) return false
       seen.add(cursor.id)
       cursor = findGroup(cursor.parentId)
     }
   }
   store.groups = store.groups.map((g) => set.has(g.id) ? { ...g, parentId: set.has(gid) ? null : gid } : g)
   save()
+  return true
 }
 function moveGroupToRoot (id) {
   const idx = store.groups.findIndex((g) => g.id === id)
