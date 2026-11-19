@@ -51,11 +51,14 @@ export function isValidSecret (secret) {
   return /^[A-Z2-7]+$/i.test(clean)
 }
 
-// 把解析结果重组为 otpauth:// URI（用于回填表单）
+// 把解析结果重组为 otpauth:// URI（用于回填表单）；保留自定义 period/digits/algorithm
 export function toOtpauthUri (otp, label) {
   const issuer = encodeURIComponent(otp.issuer || '')
   const secret = otp.secret || ''
-  const query = `secret=${secret}&issuer=${issuer}`
+  let query = `secret=${secret}&issuer=${issuer}`
+  if (otp.period && otp.period !== 30) query += `&period=${otp.period}`
+  if (otp.digits && otp.digits !== 6) query += `&digits=${otp.digits}`
+  if (otp.algorithm && String(otp.algorithm).toLowerCase() !== 'sha1') query += `&algorithm=${String(otp.algorithm).toUpperCase()}`
   const name = label || (otp.account || otp.issuer || '')
   return `otpauth://totp/${encodeURIComponent(name)}?${query}`
 }

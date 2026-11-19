@@ -64,21 +64,22 @@ function versionName (stem, ext, d) {
   return `${stem}-${ts}.${ext}`
 }
 
-// 拼接完整上传地址；file 缺省时用「当前文件名」（非版本）
+// 拼接完整上传地址；file 缺省时用「当前文件名」（非版本）。
+// 路径段与文件名逐段编码：含空格 / # / ? 等字符时不被 URL 解析截断
 function buildUrl (file) {
   const base = normalizeBase()
   if (!base) return ''
-  const p = normalizePath()
-  const name = file || defaultName()
-  return [base, p, name].filter(Boolean).join('/')
+  const segs = normalizePath().split('/').filter(Boolean).map(encodeURIComponent)
+  const name = encodeURIComponent(file || defaultName())
+  return [base, ...segs, name].join('/')
 }
 
 // 目录地址（不含文件名），用于 PROPFIND
 function buildDirUrl () {
   const base = normalizeBase()
   if (!base) return ''
-  const p = normalizePath()
-  return [base, p].filter(Boolean).join('/')
+  const segs = normalizePath().split('/').filter(Boolean).map(encodeURIComponent)
+  return [base, ...segs].join('/')
 }
 
 function escapeRegExp (s) {
@@ -203,21 +204,25 @@ async function ensureRemoteDir () {
   const base = normalizeBase()
   const segs = normalizePath().split('/').filter(Boolean)
   for (let i = 1; i <= segs.length; i++) {
-    const dirUrl = base + '/' + segs.slice(0, i).join('/')
+    const dirUrl = base + '/' + segs.slice(0, i).map(encodeURIComponent).join('/')
     const r = await davRetry(() => window.services.webdavMkcol(dirUrl, cloud.user, cloud.pass))
     if (!r.ok) {
-      // 无 status 表示网络级错误（无法连接/超时），视为失败；405/301/409 等表示目录已存在，继续
-      if (!r.status) return r
+      // 无 status 表示网络级错误（无法连接/超时）；405/409 表示目录已存在，继续。
+      // 其余状态（401/403/500 等）是真实错误，立即上报，不得当作“已存在”
+      if (!r.status || (r.status !== 405 && r.status !== 409)) return r
     }
   }
   return { ok: true }
 }
 
 export async function testConnection () {
-  const url = buildUrl()
-  if (!url) return { ok: false, error: '请先填写服务器地址' }
+  const base = normalizeBase()
+  if (!base) return { ok: false, error: '请先填写服务器地址' }
   const dr = await ensureRemoteDir()
   if (!dr.ok) return { ok: false, error: davErrorMessage(dr, '连接失败') }
+  // 用独立的临时测试文件：默认文件名上可能存着旧版真实备份，绝不能覆盖/删除
+  const { stem } = splitName(defaultName())
+  const url = buildUrl(stem + '-conn-test.tmp')
   const r = await davRetry(() => window.services.webdavPut(url, cloud.user, cloud.pass, '__ping__' + Date.now()))
   // 尝试清理测试文件
   if (r.ok) window.services.webdavDelete(url, cloud.user, cloud.pass)

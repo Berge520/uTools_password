@@ -12,7 +12,7 @@
   "features": [
     {
       "code": "vault",
-      "explain": "本地加密密码保险库（AES-256、分组拖拽、TOTP、WiFi 二维码、离线扫码）",
+      "description": "本地加密密码保险库（AES-256、分组拖拽、TOTP、WiFi 二维码、离线扫码）",
       "cmds": [
         "我的密码",
         "密码管理",
@@ -22,7 +22,7 @@
     },
     {
       "code": "qr-tool",
-      "explain": "二维码 / Data Matrix 生成与识别工具箱（文字 / 网址 / WiFi 码生成，剪贴板 / 图片 / 截屏离线识别）",
+      "description": "二维码 / Data Matrix 生成与识别工具箱（文字 / 网址 / WiFi 码生成，剪贴板 / 图片 / 截屏离线识别）",
       "cmds": [
         "二维码",
         "扫码",
@@ -31,7 +31,7 @@
     },
     {
       "code": "find-password",
-      "explain": "匹配网址，快速查找对应密码",
+      "description": "匹配网址，快速查找对应密码",
       "cmds": [
         {
           "type": "regex",
@@ -44,7 +44,7 @@
     },
     {
       "code": "import-file",
-      "explain": "导入密码备份文件（JSON / CSV）",
+      "description": "导入密码备份文件（JSON / CSV）",
       "cmds": [
         {
           "type": "files",
@@ -57,7 +57,7 @@
     },
     {
       "code": "decode-qr",
-      "explain": "识别图片中的二维码 / Data Matrix",
+      "description": "识别图片中的二维码 / Data Matrix",
       "cmds": [
         {
           "type": "img",

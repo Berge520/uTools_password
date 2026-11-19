@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { copyText } from '../utils/clipboard'
 
 const props = defineProps({
@@ -18,7 +18,8 @@ function tick () {
   const now = Math.floor(Date.now() / 1000)
   const step = Math.floor(now / period.value)
   remaining.value = period.value - (now % period.value)
-  expired.value = remaining.value <= 0
+  // remaining 取值范围是 [1, period]，<=0 永不成立；最后 5 秒标红提示即将刷新
+  expired.value = remaining.value <= 5
   if (step !== lastStep) {
     lastStep = step
     code.value = window.services.generateTotp(
@@ -45,6 +46,9 @@ onMounted(() => {
   sync()
   timer = setInterval(tick, 1000)
 })
+
+// 条目切换/编辑后 otp 变化时重新生成（组件可能被复用，不重挂载）
+watch(() => props.otp, sync)
 
 onBeforeUnmount(() => clearInterval(timer))
 </script>

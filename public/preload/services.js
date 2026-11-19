@@ -20,6 +20,49 @@ const IS_WIN = process.platform === 'win32'
 const IS_MAC = process.platform === 'darwin'
 const IS_LINUX = process.platform === 'linux'
 
+// ---- 本地数据目录 ----
+// uTools 8 起用 getPluginLocalDataPath()（文档推荐的插件本地数据目录）；
+// uTools 7 无此 API，回退 getPath('userData')。
+let localDirCache = ''
+function localDataDir () {
+  if (localDirCache) return localDirCache
+  let dir = ''
+  try {
+    if (window.utools && typeof window.utools.getPluginLocalDataPath === 'function') {
+      dir = window.utools.getPluginLocalDataPath()
+    }
+  } catch (e) {}
+  if (!dir) {
+    try { dir = window.utools.getPath('userData') } catch (e) {}
+  }
+  if (!dir) throw new Error('无法获取插件本地数据目录')
+  localDirCache = dir
+  migrateLegacyFiles(dir)
+  return dir
+}
+
+// 首次切换到新目录时，尽力把旧目录（userData）里的本地数据/会话文件复制过来。
+// 旧路径探测失败或文件不存在则跳过，不影响正常使用；不删除旧文件。
+// 用一次性标记避免每次启动重复复制——否则显式锁定后旧会话文件会被复制回来，
+// 复活宽限期自动解锁。探测失败时不写标记，留待以后重试。
+function migrateLegacyFiles (newDir) {
+  const marker = path.join(newDir, '.legacy-migrated')
+  try { if (fs.existsSync(marker)) return } catch (e) { return }
+  let oldDir = ''
+  try { oldDir = window.utools.getPath('userData') } catch (e) { return }
+  if (!oldDir) return
+  if (oldDir !== newDir) {
+    for (const name of ['password_vault_local.json', 'password_vault_session.json']) {
+      try {
+        const from = path.join(oldDir, name)
+        const to = path.join(newDir, name)
+        if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to)
+      } catch (e) {}
+    }
+  }
+  try { fs.writeFileSync(marker, '1', { encoding: 'utf-8' }) } catch (e) {}
+}
+
 // Windows 控制台默认 OEM 编码，中文系统是 GBK；netsh 输出需按 GBK 解码
 function decodeWindows (buf) {
   try {
@@ -46,16 +89,6 @@ function execFileP (file, args) {
   })
 }
 
-function runShell (cmd) {
-  if (!execSync) return ''
-  try {
-    const buf = execSync(cmd, { windowsHide: true })
-    return toText(buf)
-  } catch (e) {
-    return ''
-  }
-}
-
 function runShellDiag (cmd) {
   if (!execSync) return 'child_process 不可用'
   try {
@@ -66,32 +99,15 @@ function runShellDiag (cmd) {
   }
 }
 
-// ---------- Windows：netsh ----------
-function listWinProfiles () {
-  const out = runShell('netsh wlan show profiles')
-  const names = []
-  for (const raw of out.split(/\r?\n/)) {
-    const line = raw.trim()
-    const m = line.match(/^(?:所有用户配置文件|<All User Profile>)\s*:\s*(.+)$/i)
-    if (m && m[1].trim()) names.push(m[1].trim())
-  }
-  return names
-}
-
-function getWinPassword (name) {
-  const safeName = String(name || '').replace(/"/g, '')
-  const out = runShell(`netsh wlan show profile name="${safeName}" key=clear`)
-  const m = out.match(/关键内容\s*:\s*(.+)/) || out.match(/Key Content\s*:\s*(.+)/i)
-  return m ? m[1].trim() : ''
-}
-
+// ---------- WiFi 配置读取（异步 execFile，避免 shell 拼接）----------
 async function listWifiProfilesAsync () {
   if (IS_WIN) {
     const out = toText(await execFileP('netsh', ['wlan', 'show', 'profiles']))
     const names = []
     for (const raw of out.split(/\r?\n/)) {
       const line = raw.trim()
-      const m = line.match(/^(?:所有用户配置文件|<All User Profile>)\s*:\s*(.+)$/i)
+      // 英文系统输出为 "All User Profile : xxx"（无尖括号）
+      const m = line.match(/^(?:所有用户配置文件|All User Profile)\s*:\s*(.+)$/i)
       if (m && m[1].trim()) names.push(m[1].trim())
     }
     return names
@@ -110,10 +126,31 @@ async function listWifiProfilesAsync () {
     return names
   }
   if (IS_LINUX) {
-    const out = toText(await execFileP('nmcli', ['-t', '-f', 'NAME', 'connection', 'show']))
-    return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    const out = toText(await execFileP('nmcli', ['-t', '-f', 'NAME,TYPE', 'connection', 'show']))
+    const names = []
+    for (const line of out.split(/\r?\n/)) {
+      if (!line) continue
+      const fields = splitNmcliLine(line)
+      // 只列 WiFi 连接，排除以太网/VPN 等
+      if (fields[1] === '802-11-wireless' && fields[0]) names.push(fields[0])
+    }
+    return names
   }
   return []
+}
+
+// nmcli -t 输出用未转义的冒号分隔字段，值内冒号转义为 \:、反斜杠为 \\
+function splitNmcliLine (line) {
+  const fields = []
+  let cur = ''
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '\\' && i + 1 < line.length) { cur += line[++i]; continue }
+    if (ch === ':') { fields.push(cur); cur = ''; continue }
+    cur += ch
+  }
+  fields.push(cur)
+  return fields
 }
 
 async function getWifiPasswordAsync (name) {
@@ -132,52 +169,37 @@ async function getWifiPasswordAsync (name) {
   return ''
 }
 
-// ---------- macOS：networksetup + security（钥匙串）----------
-function listMacProfiles () {
-  const ports = runShell('networksetup -listallhardwareports')
-  const devMatch = ports.match(/Hardware Port: Wi-Fi[\s\S]*?Device:\s*(\S+)/)
-  const dev = devMatch ? devMatch[1] : 'en0'
-  const out = runShell(`networksetup -listpreferredwirelessnetworks ${dev}`)
-  const names = []
-  for (const line of out.split(/\r?\n/)) {
-    const t = line.trim()
-    if (!t || /Preferred networks on/i.test(t) || t.includes(':')) continue
-    names.push(t.replace(/^\d+\.\s*/, '').trim())
+// PBKDF2 迭代数：密文里记录 iter，解密按记录值进行（无 iter 的旧密文按 10 万次）。
+// 暂不提高默认值：旧版本插件不识别 iter，会按 10 万次派生导致跨设备读不了新密文；
+// 待下次大版本统一升级时把 PBKDF2_ITER 改为 600000 即可（旧库仍可读）。
+const PBKDF2_ITER = 100000
+const PBKDF2_ITER_LEGACY = 100000
+const PBKDF2_ITER_MAX = 10000000 // 异常/恶意密文不得用超大迭代数拖死解密
+
+// 解析并校验迭代数：缺失视为旧版 10 万次；非法/越界值拒绝（防数据异常与降级攻击）
+function resolveIter(iter) {
+  if (iter == null) return PBKDF2_ITER_LEGACY
+  if (typeof iter !== 'number' || !Number.isFinite(iter) || iter <= 0 || iter > PBKDF2_ITER_MAX) {
+    throw new Error('密文迭代数无效')
   }
-  return names
-}
-
-function getMacPassword (name) {
-  const safe = String(name || '').replace(/"/g, '')
-  return runShell(`security find-generic-password -ga "${safe}" -w`).trim()
-}
-
-// ---------- Linux：nmcli (NetworkManager) ----------
-function listLinuxProfiles () {
-  const out = runShell('nmcli -t -f NAME connection show')
-  return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-}
-
-function getLinuxPassword (name) {
-  const safe = String(name || '').replace(/"/g, '')
-  return runShell(`nmcli -s -g 802-11-wireless-security.psk connection show "${safe}"`).trim()
+  return Math.floor(iter)
 }
 
 // PBKDF2 派生 AES-256-GCM 密钥
-function deriveKey(password, salt) {
-  // 10 万次迭代，个人密码库足够安全且不卡顿
-  return crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256')
+function deriveKey(password, salt, iterations) {
+  return crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256')
 }
 
 // 加密明文字符串，返回可直接存入 utools.dbStorage 的对象
 function encryptData(plaintext, password) {
   const salt = crypto.randomBytes(16)
   const iv = crypto.randomBytes(12)
-  const key = deriveKey(password, salt)
+  const key = deriveKey(password, salt, PBKDF2_ITER)
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
   return {
     mode: 'encrypted',
+    iter: PBKDF2_ITER,
     salt: salt.toString('base64'),
     iv: iv.toString('base64'),
     authTag: cipher.getAuthTag().toString('base64'),
@@ -190,7 +212,7 @@ function decryptData(blob, password) {
   const salt = Buffer.from(blob.salt, 'base64')
   const iv = Buffer.from(blob.iv, 'base64')
   const authTag = Buffer.from(blob.authTag, 'base64')
-  const key = deriveKey(password, salt)
+  const key = deriveKey(password, salt, resolveIter(blob.iter))
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
   decipher.setAuthTag(authTag)
   const decrypted = Buffer.concat([
@@ -200,15 +222,17 @@ function decryptData(blob, password) {
   return decrypted.toString('utf8')
 }
 
-// 使用已派生密钥加密（自动解锁场景下仍可安全写盘，保留原 salt 以保持一致）
-function encryptDataWithKey(plaintext, saltBase64, keyBase64) {
+// 使用已派生密钥加密（自动解锁场景下仍可安全写盘，保留原 salt 与迭代数以保持一致）
+function encryptDataWithKey(plaintext, saltBase64, keyBase64, iterations) {
   const salt = Buffer.from(saltBase64, 'base64')
   const iv = crypto.randomBytes(12)
   const key = Buffer.from(keyBase64, 'base64')
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+  const iter = resolveIter(iterations)
   return {
     mode: 'encrypted',
+    iter,
     salt: salt.toString('base64'),
     iv: iv.toString('base64'),
     authTag: cipher.getAuthTag().toString('base64'),
@@ -217,8 +241,8 @@ function encryptDataWithKey(plaintext, saltBase64, keyBase64) {
 }
 
 // 由密码+盐派生密钥并返回 base64（用于宽限期自动解锁）
-function deriveKeyBase64(password, saltBase64) {
-  const key = deriveKey(password, Buffer.from(saltBase64, 'base64'))
+function deriveKeyBase64(password, saltBase64, iterations) {
+  const key = deriveKey(password, Buffer.from(saltBase64, 'base64'), resolveIter(iterations))
   return key.toString('base64')
 }
 
@@ -276,6 +300,9 @@ function webdavRequest (method, url, user, pwd, body) {
               data: Buffer.concat(chunks).toString('utf8')
             })
           })
+          // 响应流中途出错/被中断时也要 resolve，否则调用方永久挂起（webdavBusy 卡死）
+          res.on('error', (e) => resolve({ ok: false, status: res.statusCode, error: e.message }))
+          res.on('aborted', () => resolve({ ok: false, status: res.statusCode, error: '连接中断' }))
         }
       )
       req.on('error', (e) => resolve({ ok: false, error: e.message }))
@@ -374,6 +401,8 @@ function webdavPropfind (url, user, pwd) {
               xml: Buffer.concat(chunks).toString('utf8')
             })
           })
+          res.on('error', (e) => resolve({ ok: false, status: res.statusCode, error: e.message }))
+          res.on('aborted', () => resolve({ ok: false, status: res.statusCode, error: '连接中断' }))
         }
       )
       req.on('error', (e) => resolve({ ok: false, error: e.message }))
@@ -448,13 +477,23 @@ function _httpGet (url, maxRedirect) {
     }
     const req = mod.get(url, { timeout: 10000, headers: { 'User-Agent': 'uTools-Password-Plugin' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        if (maxRedirect > 0) return resolve(_httpGet(res.headers.location, maxRedirect - 1))
         res.resume()
+        if (maxRedirect > 0) {
+          // Location 可能是相对路径，需基于当前 URL 解析
+          let next
+          try {
+            next = new URL(res.headers.location, url).href
+          } catch (e) {
+            return resolve({ ok: false, error: 'invalid redirect location' })
+          }
+          return resolve(_httpGet(next, maxRedirect - 1))
+        }
         return resolve({ ok: false, error: 'too many redirects' })
       }
-      let data = ''
-      res.on('data', (chunk) => { data += chunk })
-      res.on('end', () => resolve({ ok: res.statusCode === 200, data, status: res.statusCode }))
+      const chunks = []
+      res.on('data', (chunk) => chunks.push(chunk))
+      res.on('end', () => resolve({ ok: res.statusCode === 200, data: Buffer.concat(chunks).toString('utf8'), status: res.statusCode }))
+      res.on('error', (err) => resolve({ ok: false, error: err.message }))
     })
     req.on('error', (err) => resolve({ ok: false, error: err.message }))
     req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }) })
@@ -525,13 +564,13 @@ window.services = {
   },
 
   // 派生密钥（base64）用于宽限期自动解锁
-  deriveKeyBase64 (password, saltBase64) {
-    return deriveKeyBase64(password, saltBase64)
+  deriveKeyBase64 (password, saltBase64, iterations) {
+    return deriveKeyBase64(password, saltBase64, iterations)
   },
 
   // 使用已派生密钥加密
-  encryptDataWithKey (plaintext, saltBase64, keyBase64) {
-    return encryptDataWithKey(plaintext, saltBase64, keyBase64)
+  encryptDataWithKey (plaintext, saltBase64, keyBase64, iterations) {
+    return encryptDataWithKey(plaintext, saltBase64, keyBase64, iterations)
   },
 
   // 直接使用已派生密钥解密
@@ -541,14 +580,14 @@ window.services = {
 
   // ---- 会话密钥文件（宽限期自动解锁，仅本地，不同步）----
   sessionPath () {
-    return path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    return path.join(localDataDir(), 'password_vault_session.json')
   },
   storeSession (obj) {
-    const fp = path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    const fp = path.join(localDataDir(), 'password_vault_session.json')
     fs.writeFileSync(fp, JSON.stringify(obj || {}), { encoding: 'utf-8' })
   },
   readSession () {
-    const fp = path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    const fp = path.join(localDataDir(), 'password_vault_session.json')
     try {
       return JSON.parse(fs.readFileSync(fp, { encoding: 'utf-8' }))
     } catch (e) {
@@ -556,7 +595,7 @@ window.services = {
     }
   },
   clearSession () {
-    const fp = path.join(window.utools.getPath('userData'), 'password_vault_session.json')
+    const fp = path.join(localDataDir(), 'password_vault_session.json')
     try {
       fs.unlinkSync(fp)
     } catch (e) {}
@@ -592,17 +631,17 @@ window.services = {
 
   // ---- 本地文件存储（关闭云端同步时使用，不会随 uTools 同步）----
   localDataFilePath () {
-    return path.join(window.utools.getPath('userData'), 'password_vault_local.json')
+    return path.join(localDataDir(), 'password_vault_local.json')
   },
 
   storeLocalData (text) {
-    const fp = path.join(window.utools.getPath('userData'), 'password_vault_local.json')
+    const fp = path.join(localDataDir(), 'password_vault_local.json')
     fs.writeFileSync(fp, text, { encoding: 'utf-8' })
     return fp
   },
 
   readLocalData () {
-    const fp = path.join(window.utools.getPath('userData'), 'password_vault_local.json')
+    const fp = path.join(localDataDir(), 'password_vault_local.json')
     try {
       return fs.readFileSync(fp, { encoding: 'utf-8' })
     } catch (e) {
@@ -611,7 +650,7 @@ window.services = {
   },
 
   removeLocalData () {
-    const fp = path.join(window.utools.getPath('userData'), 'password_vault_local.json')
+    const fp = path.join(localDataDir(), 'password_vault_local.json')
     try {
       fs.unlinkSync(fp)
     } catch (e) {}

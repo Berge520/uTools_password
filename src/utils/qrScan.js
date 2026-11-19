@@ -13,9 +13,9 @@ function loadImage (src) {
   })
 }
 
-function decodeOnCanvas (img, jsQR) {
+function decodeOnCanvas (img, jsQR, maxSide = MAX_DIM) {
   const canvas = document.createElement('canvas')
-  const scale = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight))
+  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight))
   canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
   canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
@@ -53,8 +53,25 @@ function recodeText (text) {
   if (!hasHigh) return text
   const u8 = Uint8Array.from(bytes)
   try { return new TextDecoder('utf-8', { fatal: true }).decode(u8) } catch (e) { /* 不是 UTF-8，继续尝试 */ }
-  try { return new TextDecoder('gb18030').decode(u8) } catch (e) { /* 浏览器不支持则保留原文 */ }
+  // 仅当字节构成合法 GBK 双字节序列时才按 GB18030 解码，
+  // 否则 Latin-1 文本（如 café）会被错误地转成乱码汉字
+  if (looksLikeGbk(u8)) {
+    try { return new TextDecoder('gb18030').decode(u8) } catch (e) { /* 浏览器不支持则保留原文 */ }
+  }
   return text
+}
+
+function looksLikeGbk (u8) {
+  for (let i = 0; i < u8.length; i++) {
+    const b = u8[i]
+    if (b < 0x80) continue
+    if (b < 0x81 || b > 0xFE) return false
+    const t = u8[i + 1]
+    if (t == null) return false
+    if (!((t >= 0x40 && t <= 0x7E) || (t >= 0x80 && t <= 0xFE))) return false
+    i++
+  }
+  return true
 }
 
 /**
@@ -110,10 +127,10 @@ export async function decodeQrFromDataUrl (dataUrl) {
   try {
     const img = await loadImage(dataUrl)
     const { default: jsQR } = await import('jsqr')
-    // 先尝试缩小后的图，失败再用原图
+    // 先尝试缩小后的图（快），失败再用原尺寸（小二维码缩后可能丢细节）
     const scaled = await decodeOnCanvas(img, jsQR)
     if (scaled && scaled.data) return { data: scaled.data, format: 'QR 码' }
-    const full = await decodeOnCanvas(img, jsQR)
+    const full = await decodeOnCanvas(img, jsQR, Infinity)
     if (full && full.data) return { data: full.data, format: 'QR 码' }
     // 最后一搏：放大（对小图有用）
     if (img.naturalWidth < 400) {
@@ -161,15 +178,19 @@ export async function pickAndDecodeQr () {
 
 /**
  * 框选屏幕区域并离线解码（QR / Data Matrix）
- * @param {(result:{data:string, format:string}|null)=>void} done 回调；取消或未识别返回 null
+ * @returns {Promise<{data:string, format:string}|null>} 取消或未识别返回 null
  */
-export function captureAndDecodeQr (done) {
-  window.utools.screenCapture((imgBase64) => {
-    if (!imgBase64) { done(null); return }
-    decodeQrFromDataUrl(normalizeImageBase64(imgBase64)).then((qr) => {
-      done(qr && qr.data ? qr : null)
-    })
-  })
+export async function captureAndDecodeQr () {
+  let imgBase64
+  try {
+    // Promise 模式：用户取消时 reject（官方文档 screen.md）
+    imgBase64 = await window.utools.screenCapture()
+  } catch (e) {
+    return null
+  }
+  if (!imgBase64) return null
+  const qr = await decodeQrFromDataUrl(normalizeImageBase64(imgBase64))
+  return qr && qr.data ? qr : null
 }
 
 // 规范化 uTools 截图回调可能返回的 base64 字符串 => data URL

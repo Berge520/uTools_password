@@ -37,17 +37,19 @@ async function fromImage () {
   }
 }
 
-function fromScreen () {
+async function fromScreen () {
   busy.value = true
   failHint.value = ''
-  captureAndDecodeQr((res) => {
-    busy.value = false
+  try {
+    const res = await captureAndDecodeQr()
     if (!res) {
       failHint.value = '未识别到二维码或 Data Matrix，请换更清晰的截图重试。'
       return
     }
     handle(res.data, '屏幕截图', res.format)
-  })
+  } finally {
+    busy.value = false
+  }
 }
 
 function handle (text, from, format) {

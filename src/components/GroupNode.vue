@@ -11,10 +11,13 @@ const props = defineProps({
   depth: { type: Number, default: 0 },
   selectedId: { type: String, default: null },
   batchMode: { type: Boolean, default: false },
-  selected: { type: Boolean, default: false }
+  selectedIds: { type: Object, default: () => ({}) }
 })
 
 const emit = defineEmits(['select', 'toggle-select'])
+
+// 每个节点按自己的 id 查选中态（传 Boolean 会让父组选中态错误地套到所有子组）
+const selected = computed(() => !!props.selectedIds[props.group.id])
 
 const confirmState = ref({ open: false, title: '', message: '', confirmText: '确定', danger: false, onConfirm: null })
 
@@ -133,7 +136,7 @@ function onDragEnd () {
       'drop-before': dnd.targetId === group.id && dnd.mode === 'before',
       'drop-after': dnd.targetId === group.id && dnd.mode === 'after',
       'drop-inside': dnd.targetId === group.id && dnd.mode === 'inside',
-      'batch-sel': props.selected
+      'batch-sel': selected
     }"
     :style="{ paddingLeft: depth * 14 + 'px' }"
     draggable="true"
@@ -183,7 +186,7 @@ function onDragEnd () {
       :depth="depth + 1"
       :selected-id="selectedId"
       :batch-mode="batchMode"
-      :selected="selected"
+      :selected-ids="selectedIds"
       @select="(id) => emit('select', id)"
       @toggle-select="(id) => emit('toggle-select', id)"
     />

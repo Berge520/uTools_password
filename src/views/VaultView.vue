@@ -107,7 +107,30 @@ async function resolveImageSource (payload) {
   return ''
 }
 
+const moreOpen = ref(false)
+const moreRef = ref(null)
+const searchRef = ref(null)
+const showForm = ref(false)
+const editing = ref(null)
+const showGen = ref(false)
+const showSettings = ref(false)
+const showWifi = ref(false)
+const showWifiQr = ref(false)   // WiFi 直连二维码（手动生成 / 扫码识别）
+const showReceive = ref(false) // 接收分享（文字 / 二维码 → 新增到插件）
+const showQrTool = ref(false)  // 二维码工具箱（生成 / 识别）
+const qrInitialText = ref('')  // 工具箱带入的识别结果
+const qrInitialFormat = ref('') // 工具箱带入的码制（QR 码 / Data Matrix）
+const receiveInitialText = ref('') // 接收分享带入的初始文本
+const shareEntry = ref(null) // 打开分享弹窗的条目
+const importParsed = ref(null)
+const moveGroupMenu = ref(false)
+const importOpen = ref(false)
+const revealed = ref({})
+const selection = ref('all') // 'all' | 'uncat' | groupId
+const confirmState = ref({ open: false, title: '', message: '', confirmText: '确定', danger: false, onConfirm: null })
+
 // 匹配指令入口：uTools 匹配到网址/文件/图片后进入插件，自动触发对应功能
+// 注意：必须放在相关 ref 声明之后，immediate 回调在 setup 期间同步执行，提前引用会触发 TDZ 崩溃
 watch(() => store.pendingAction, (action) => {
   if (!action) return
   if (action.type === 'import') {
@@ -146,27 +169,6 @@ watch(() => store.pendingAction, (action) => {
   }
   store.pendingAction = null
 }, { immediate: true })
-const moreOpen = ref(false)
-const moreRef = ref(null)
-const searchRef = ref(null)
-const showForm = ref(false)
-const editing = ref(null)
-const showGen = ref(false)
-const showSettings = ref(false)
-const showWifi = ref(false)
-const showWifiQr = ref(false)   // WiFi 直连二维码（手动生成 / 扫码识别）
-const showReceive = ref(false) // 接收分享（文字 / 二维码 → 新增到插件）
-const showQrTool = ref(false)  // 二维码工具箱（生成 / 识别）
-const qrInitialText = ref('')  // 工具箱带入的识别结果
-const qrInitialFormat = ref('') // 工具箱带入的码制（QR 码 / Data Matrix）
-const receiveInitialText = ref('') // 接收分享带入的初始文本
-const shareEntry = ref(null) // 打开分享弹窗的条目
-const importParsed = ref(null)
-const moveGroupMenu = ref(false)
-const importOpen = ref(false)
-const revealed = ref({})
-const selection = ref('all') // 'all' | 'uncat' | groupId
-const confirmState = ref({ open: false, title: '', message: '', confirmText: '确定', danger: false, onConfirm: null })
 
 // ---------- 批量管理 ----------
 const batchMode = ref(false)
@@ -264,6 +266,14 @@ const selectedGroupId = computed(() => {
   return selection.value
 })
 
+// 当前选中的分组被删除（含批量删除/远程同步）时回退到「全部」，
+// 否则列表恒为空，且新增条目会挂到已删除的分组 id 上而不可见
+watch(() => store.groups, (groups) => {
+  const sel = selection.value
+  if (sel === 'all' || sel === 'uncat' || sel === 'fav') return
+  if (!groups.some((g) => g.id === sel)) selection.value = 'all'
+}, { deep: true })
+
 const baseList = computed(() => {
   if (selection.value === 'all') return store.entries
   if (selection.value === 'uncat') return store.entries.filter((e) => !e.groupId)
@@ -271,17 +281,14 @@ const baseList = computed(() => {
   return store.entries.filter((e) => (e.groupId || null) === selection.value)
 })
 
-// 收藏项置顶显示（稳定排序）
-const sortedList = computed(() => {
-  const list = baseList.value.slice()
-  return list.sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0))
-})
-
+// 列表顺序由数据层保证（收藏恒定在前，save 时归一），此处不再二次排序：
+// 否则拖拽落点与视觉顺序不一致，且每次输入都多一次全量 sort
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
-  if (!k) return sortedList.value
+  const list = baseList.value
+  if (!k) return list
   const out = []
-  for (const e of sortedList.value) {
+  for (const e of list) {
     // 逐字段短路判断，避免为每个条目额外分配数组（大库输入搜索时减少 GC 压力）
     if (
       (e.title && e.title.toLowerCase().includes(k)) ||
@@ -397,8 +404,9 @@ const layout = computed(() => {
   }
 })
 
-// 切换分组 / 更新搜索词 / 增删条目时，滚动回到顶部，避免定位错乱
+// 切换分组 / 更新搜索词 / 增删条目时，滚动回到顶部并清除键盘选中，避免定位错乱
 watch([() => selection.value, () => keyword.value, () => store.entries.length], () => {
+  navIndex.value = -1
   scrollTop.value = 0
   if (listRef.value) listRef.value.scrollTop = 0
 })
@@ -416,10 +424,9 @@ function openEdit (entry) {
 
 function onSave (data) {
   if (editing.value) {
-    updateEntry(editing.value.id, data)
-    showToast('已保存')
+    const ok = updateEntry(editing.value.id, data)
+    showToast(ok ? '已保存' : '保存失败：该条目已被删除')
   } else {
-    if ((data.groupId || null) == null) data.groupId = selectedGroupId.value
     addEntry(data)
     showToast('已添加')
   }
@@ -447,9 +454,10 @@ function onConfirmConfirm () {
   confirmState.value = { ...confirmState.value, open: false }
 }
 
-function copy (text, label, ev) {
+// sensitive：密码类内容复制后 15 秒自动清空；账号等非敏感内容不清空，避免"刚复制就没了"
+function copy (text, label, sensitive = false) {
   if (batchMode.value) return
-  copyText(text, { label: label || '' })
+  copyText(text, { label: label || '', sensitive })
 }
 
 function toggleReveal (id) {
@@ -679,6 +687,15 @@ function onEntryDragStart (entry, e) {
 function onEntryOver (entry, e) {
   if (dnd.type !== 'entry' || dnd.id === entry.id) return
   e.preventDefault()
+  const dragged = store.entries.find((x) => x.id === dnd.id)
+  if (dragged && !!dragged.favorite !== !!entry.favorite) {
+    // 跨收藏分区：落点吸附到分区边界（与数据层 moveEntry 的吸附规则一致），
+    // 指示器停在条目实际会落到的位置，避免“指示在这、落点在那”
+    const lastFav = [...filtered.value].reverse().find((x) => x.favorite && x.id !== dnd.id)
+    dnd.targetId = lastFav ? lastFav.id : null
+    dnd.mode = lastFav ? 'after' : null
+    return
+  }
   const rect = e.currentTarget.getBoundingClientRect()
   const mode = (e.clientY - rect.top) / rect.height < 0.5 ? 'before' : 'after'
   dnd.targetId = entry.id
@@ -695,8 +712,10 @@ function onEntryLeave () {
 function onEntryDrop (entry, e) {
   e.preventDefault()
   if (dnd.type !== 'entry' || dnd.id === entry.id) return
+  // 使用 dragover 阶段计算好的落点（跨收藏分区时可能吸附到边界卡片）
+  if (!dnd.targetId || !dnd.mode) { clearDrag(); return }
   const before = dnd.mode === 'before'
-  moveEntry(dnd.id, entry.id, before)
+  moveEntry(dnd.id, dnd.targetId, before)
   clearDrag()
 }
 
@@ -736,12 +755,77 @@ function onUncatDrop (e) {
   }
 }
 
+// ---------- 键盘导航 ----------
+const navIndex = ref(-1)
+const navId = computed(() => {
+  const e = filtered.value[navIndex.value]
+  return e ? e.id : ''
+})
+
+function anyOverlayOpen () {
+  return showForm.value || showGen.value || showSettings.value || showWifi.value || showWifiQr.value ||
+    showReceive.value || showQrTool.value || !!shareEntry.value || confirmState.value.open ||
+    batchMode.value || groupBatch.value
+}
+
+function scrollEntryIntoView (id) {
+  const list = filtered.value
+  const idx = list.findIndex((e) => e.id === id)
+  if (idx === -1) return
+  let top = 0
+  for (let i = 0; i < idx; i++) top += (heightCache[list[i].id] || EST_H) + CARD_GAP
+  const h = heightCache[id] || EST_H
+  const viewH = listViewH.value
+  if (top < scrollTop.value) scrollTop.value = top
+  else if (top + h > scrollTop.value + viewH) scrollTop.value = top + h - viewH
+  if (listRef.value) listRef.value.scrollTop = scrollTop.value
+}
+
 function onGlobalKeydown (e) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+  const key = e.key
+  const t = e.target
+  const typing = !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable))
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && key.toLowerCase() === 'f') {
     e.preventDefault()
     searchRef.value && searchRef.value.focus()
+    return
   }
-  if (e.key === 'Escape' && moreOpen.value) moreOpen.value = false
+  if (mod && key.toLowerCase() === 'n') {
+    if (anyOverlayOpen()) return
+    e.preventDefault()
+    openAdd()
+    return
+  }
+  if (mod && key.toLowerCase() === 'l') {
+    e.preventDefault()
+    lock()
+    showToast('已锁定')
+    return
+  }
+  if (key === 'Escape' && moreOpen.value) { moreOpen.value = false; return }
+  // 以下快捷键在输入框/弹层中不生效，避免与文本编辑、弹层交互冲突
+  if (typing || anyOverlayOpen()) return
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    const n = filtered.value.length
+    if (!n) return
+    e.preventDefault()
+    let i = navIndex.value + (key === 'ArrowDown' ? 1 : -1)
+    if (i < 0) i = 0
+    if (i > n - 1) i = n - 1
+    navIndex.value = i
+    scrollEntryIntoView(filtered.value[i].id)
+    return
+  }
+  if (key === 'Enter') {
+    // 焦点在按钮/链接上时 Enter 应激活它们，而不是打开编辑
+    if (t && (t.tagName === 'BUTTON' || t.tagName === 'A')) return
+    const cur = filtered.value[navIndex.value]
+    if (cur) {
+      e.preventDefault()
+      openEdit(cur)
+    }
+  }
 }
 
 function onDocClick (e) {
@@ -884,7 +968,7 @@ onBeforeUnmount(() => {
             :depth="0"
             :selected-id="selection"
             :batch-mode="groupBatch"
-            :selected="!!selGroupIds[g.id]"
+            :selected-ids="selGroupIds"
             @select="(id) => (selection = id)" @toggle-select="toggleSelGroup"
           />
         </template>
@@ -1012,6 +1096,7 @@ onBeforeUnmount(() => {
             :class="{
               'drop-before': dnd.type === 'entry' && dnd.targetId === entry.id && dnd.mode === 'before',
               'drop-after': dnd.type === 'entry' && dnd.targetId === entry.id && dnd.mode === 'after',
+              'nav-active': navId === entry.id,
               selected: batchMode && selectedIds[entry.id]
             }"
             :draggable="!keyword && !batchMode"
@@ -1057,7 +1142,7 @@ onBeforeUnmount(() => {
                 <span
                   class="row-value mono click-copy"
                   title="点击复制密码"
-                  @click="copy(entry.password, '密码')"
+                  @click="copy(entry.password, '密码', true)"
                 >
                   <template v-if="revealed[entry.id]">{{ entry.password || '—' }}</template>
                   <template v-else>••••••••</template>
@@ -1573,6 +1658,11 @@ onBeforeUnmount(() => {
 .card.selected {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary), var(--shadow-sm);
+}
+
+.card.nav-active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary) inset, var(--shadow-sm);
 }
 
 .card-check {

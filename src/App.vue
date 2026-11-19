@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, onBeforeUnmount, watch } from 'vue'
-import { store, initialize, lock, touchSession } from './store/vault'
+import { store, initialize, handleDbPull, lock, touchSession } from './store/vault'
 import { toast, showToast } from './utils/toast'
 import { loadTheme } from './store/theme'
 import VaultView from './views/VaultView.vue'
@@ -12,10 +12,11 @@ let subInputActive = false
 function setupSubInput () {
   if (!window.utools || !window.utools.setSubInput || subInputActive) return
   if (!store.quickSearch) return
-  subInputActive = true
-  window.utools.setSubInput(({ text }) => {
+  // 自定义窗口中设置会失败（返回 false），此时不能标记为已激活
+  const ok = window.utools.setSubInput(({ text }) => {
     store.initialSearch = text || ''
   }, '搜索密码…')
+  if (ok !== false) subInputActive = true
 }
 
 function removeSubInput () {
@@ -101,6 +102,11 @@ onMounted(() => {
     })
   }
 
+  // 其他设备同步的数据到达时应用远程更新（uTools 8 起提供，旧版本无此 API 则跳过）
+  if (window.utools && window.utools.onDbPull) {
+    window.utools.onDbPull(() => handleDbPull())
+  }
+
   initialize()
   window.addEventListener('mousemove', onActivity)
   window.addEventListener('keydown', onActivity)
@@ -134,6 +140,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-root">
     <div v-if="store.bootNotice" class="boot-notice">{{ store.bootNotice }}</div>
+    <div v-if="!store.ready && !store.bootNotice" class="boot-loading">加载中…</div>
     <LockScreen v-if="store.secured && store.locked" />
     <VaultView v-else-if="store.ready && !store.bootNotice" />
 
@@ -144,6 +151,15 @@ onBeforeUnmount(() => {
 <style scoped>
 .app-root {
   height: 100%;
+}
+
+.boot-loading {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .boot-notice {

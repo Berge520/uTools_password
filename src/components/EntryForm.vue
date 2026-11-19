@@ -2,7 +2,7 @@
 import { reactive, ref, computed, defineAsyncComponent, watch } from 'vue'
 import Generator from './Generator.vue'
 import GroupPicker from './GroupPicker.vue'
-import { parseOtpauth } from '../utils/totp'
+import { parseOtpauth, toOtpauthUri } from '../utils/totp'
 
 // 延迟加载，jsQR 不进入首屏 bundle
 const QrScanner = defineAsyncComponent(() => import('./QrScanner.vue'))
@@ -51,7 +51,9 @@ watch(
     form.password = e ? (e.password || '') : ''
     form.url = e ? (e.url || '') : ''
     form.notes = e ? (e.notes || '') : ''
-    form.totp = e && e.otp ? (e.otp.secret || '') : ''
+    // 回填完整 otpauth URI：只填 secret 会丢失自定义 period/digits/algorithm，保存后参数被重置；
+    // 不传 label，沿用存储的 account/issuer，避免每次编辑后账号标签被标题覆盖漂移
+    form.totp = e && e.otp ? toOtpauthUri(e.otp) : ''
     form.groupId = e ? (e.groupId || null) : (props.defaultGroupId || null)
     // 编辑时若含高级字段则自动展开
     advanced.value = !!(e && (e.url || e.notes || e.otp))

@@ -39,12 +39,18 @@ function toggleCloud () {
   webdavMsg.value = ''
 }
 
-async function onWebdavTest () {  saveCloud()
+async function onWebdavTest () {
+  saveCloud()
   webdavBusy.value = true
   webdavMsg.value = ''
-  const r = await testConnection()
-  webdavBusy.value = false
-  webdavMsg.value = r.ok ? '✅ 连接成功' : ('❌ ' + (r.error || '失败'))
+  try {
+    const r = await testConnection()
+    webdavMsg.value = r.ok ? '✅ 连接成功' : ('❌ ' + (r.error || '失败'))
+  } catch (e) {
+    webdavMsg.value = '❌ ' + (e && e.message ? e.message : '连接失败')
+  } finally {
+    webdavBusy.value = false
+  }
 }
 
 function onWebdavBackupClick () {
@@ -61,14 +67,19 @@ async function onWebdavBackup () {
   backupConfirm.value = false
   webdavBusy.value = true
   webdavMsg.value = ''
-  const r = await backupNow()
-  webdavBusy.value = false
-  if (!r.ok) {
-    webdavMsg.value = '❌ ' + (r.error || '失败')
-  } else if (r.plain) {
-    webdavMsg.value = '✅ 备份成功（数据为明文，未加密上传；云端已保留最近 ' + (r.kept || 3) + ' 份）'
-  } else {
-    webdavMsg.value = '✅ 备份成功（已加密上传；云端已保留最近 ' + (r.kept || 3) + ' 份）'
+  try {
+    const r = await backupNow()
+    if (!r.ok) {
+      webdavMsg.value = '❌ ' + (r.error || '失败')
+    } else if (r.plain) {
+      webdavMsg.value = '✅ 备份成功（数据为明文，未加密上传；云端已保留最近 ' + (r.kept || 3) + ' 份）'
+    } else {
+      webdavMsg.value = '✅ 备份成功（已加密上传；云端已保留最近 ' + (r.kept || 3) + ' 份）'
+    }
+  } catch (e) {
+    webdavMsg.value = '❌ ' + (e && e.message ? e.message : '备份失败')
+  } finally {
+    webdavBusy.value = false
   }
 }
 
@@ -80,31 +91,42 @@ async function openRestoreConfirm () {
   restorePreview.value = null
   selectedBackup.value = null
   webdavBusy.value = true
-  const r = await listRemoteBackups()
-  webdavBusy.value = false
-  if (!r.ok) {
+  try {
+    const r = await listRemoteBackups()
+    if (!r.ok) {
+      restoreConfirm.value = false
+      webdavMsg.value = '❌ ' + (r.error || '失败')
+    } else if (!r.backups.length) {
+      restoreConfirm.value = false
+      webdavMsg.value = '❌ 云端暂无备份'
+    } else {
+      restoreList.value = r.backups
+    }
+  } catch (e) {
     restoreConfirm.value = false
-    webdavMsg.value = '❌ ' + (r.error || '失败')
-  } else if (!r.backups.length) {
-    restoreConfirm.value = false
-    webdavMsg.value = '❌ 云端暂无备份'
-  } else {
-    restoreList.value = r.backups
+    webdavMsg.value = '❌ ' + (e && e.message ? e.message : '读取备份列表失败')
+  } finally {
+    webdavBusy.value = false
   }
 }
 
 // 用户选中某个备份版本后：读取该版本摘要，进入预览确认阶段
 async function selectBackup (name) {
   webdavBusy.value = true
-  const r = await previewRemote(name)
-  webdavBusy.value = false
-  if (!r.ok) {
-    webdavMsg.value = '❌ ' + (r.error || '失败')
-    return
+  try {
+    const r = await previewRemote(name)
+    if (!r.ok) {
+      webdavMsg.value = '❌ ' + (r.error || '失败')
+      return
+    }
+    selectedBackup.value = name
+    restorePreview.value = r
+    restoreSelecting.value = false
+  } catch (e) {
+    webdavMsg.value = '❌ ' + (e && e.message ? e.message : '读取备份失败')
+  } finally {
+    webdavBusy.value = false
   }
-  selectedBackup.value = name
-  restorePreview.value = r
-  restoreSelecting.value = false
 }
 
 // 从预览阶段返回版本选择
@@ -118,21 +140,31 @@ async function onWebdavRestore () {
   restoreConfirm.value = false
   webdavBusy.value = true
   webdavMsg.value = ''
-  const r = await restoreNow(selectedBackup.value)
-  webdavBusy.value = false
-  webdavMsg.value = r.ok ? ('✅ 已从云端恢复' + (r.encrypted ? '（加密数据，需输入主密码）' : '')) : ('❌ ' + (r.error || '失败'))
-  if (r.ok) emit('close')
+  try {
+    const r = await restoreNow(selectedBackup.value)
+    webdavMsg.value = r.ok ? ('✅ 已从云端恢复' + (r.encrypted ? '（加密数据，需输入主密码）' : '')) : ('❌ ' + (r.error || '失败'))
+    if (r.ok) emit('close')
+  } catch (e) {
+    webdavMsg.value = '❌ ' + (e && e.message ? e.message : '恢复失败')
+  } finally {
+    webdavBusy.value = false
+  }
 }
 
 async function onWebdavExport () {
   webdavBusy.value = true
   webdavMsg.value = ''
-  const r = await exportLocal()
-  webdavBusy.value = false
-  if (r.ok) {
-    webdavMsg.value = '✅ 已导出到本地：' + r.path
-  } else if (!r.canceled) {
-    webdavMsg.value = '❌ ' + (r.error || '导出失败')
+  try {
+    const r = await exportLocal()
+    if (r.ok) {
+      webdavMsg.value = '✅ 已导出到本地：' + r.path
+    } else if (!r.canceled) {
+      webdavMsg.value = '❌ ' + (r.error || '导出失败')
+    }
+  } catch (e) {
+    webdavMsg.value = '❌ ' + (e && e.message ? e.message : '导出失败')
+  } finally {
+    webdavBusy.value = false
   }
 }
 
@@ -165,7 +197,7 @@ function toggleSync () {
   }
   const res = setSyncEnabled(!store.syncEnabled)
   if (res.ok) {
-    showToast(store.syncEnabled ? '已开启数据同步（备份到 uTools 云端）' : '已关闭数据同步（仅保存在本机）')
+    showToast(store.syncEnabled ? '已开启数据同步（备份到 uTools 云端）' : '已关闭数据同步（新数据仅存本机，云端副本保留）')
   } else if (res.blocked) {
     showToast('数据量超过 uTools 同步上限（约 1MB），已切换为仅本地存储')
   }
@@ -227,6 +259,18 @@ const versionStatus = ref('') // '' | 'off' | 'checking' | 'latest' | 'update' |
 const latestVersion = ref('')
 const updateUrl = ref('')
 
+// 语义化版本数值比较：a>b 返回 1，a<b 返回 -1，相等返回 0
+function cmpVersion (a, b) {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0)
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0
+    const y = pb[i] || 0
+    if (x !== y) return x > y ? 1 : -1
+  }
+  return 0
+}
+
 async function checkVersion () {
   if (!pref.versionCheck || pref.offlineMode) {
     versionStatus.value = 'off'
@@ -236,13 +280,19 @@ async function checkVersion () {
   try {
     const url = 'https://ghfast.top/https://raw.githubusercontent.com/Berge520/uTools_password/refs/heads/main/package.json'
     const res = await window.services.fetchUrl(url)
+    // 请求期间用户可能已关闭版本检查或开启离线模式
+    if (!pref.versionCheck || pref.offlineMode) {
+      versionStatus.value = 'off'
+      return
+    }
     if (!res.ok || !res.data) {
       versionStatus.value = 'error'
       return
     }
     const remote = JSON.parse(res.data)
     latestVersion.value = remote.version || ''
-    if (latestVersion.value === APP_VERSION) {
+    // 字符串相等会把「本地版本更新」误报为有更新；按数值比较
+    if (cmpVersion(latestVersion.value, APP_VERSION) <= 0) {
       versionStatus.value = 'latest'
     } else {
       versionStatus.value = 'update'
@@ -554,7 +604,7 @@ function onLock () {
               <template v-if="member.syncing">
                 {{ store.syncEnabled
                   ? '数据写入 uTools 数据库，已开启『数据同步』，可自动备份到服务端并跨设备同步。'
-                  : '数据仅保存在本机，不随 uTools 同步。' }}
+                  : '新数据仅保存在本机，不随 uTools 同步；云端旧副本保留。' }}
               </template>
               <template v-else>
                 {{ member.loggedIn
@@ -565,7 +615,7 @@ function onLock () {
           </div>
           <button
             class="switch"
-            :class="{ on: store.syncEnabled }"
+            :class="{ on: store.syncEnabled && member.syncing }"
             :disabled="!member.syncing || pref.offlineMode"
             @click="toggleSync"
           >
@@ -593,7 +643,9 @@ function onLock () {
         </div>
 
         <div class="storage-info">
-          当前存储：<b>{{ store.syncEnabled ? 'uTools 数据库（随会员数据同步）' : '本地文件' }}</b>
+          当前存储：<b>{{ store.syncEnabled
+            ? (store.syncBlocked ? 'uTools 数据库（仅本机保存，云端同步未生效）' : 'uTools 数据库（随会员数据同步）')
+            : '本地文件' }}</b>
           <template v-if="!store.syncEnabled && localPath">
             <span class="path">{{ localPath }}</span>
           </template>

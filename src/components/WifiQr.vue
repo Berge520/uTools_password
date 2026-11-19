@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref, computed, watch, onMounted } from 'vue'
+import { reactive, ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import QRCode from 'qrcode'
 import { addEntry } from '../store/vault'
 import { WIFI_TYPES, buildWifiPayload, parseWifiPayload } from '../utils/wifi'
@@ -52,6 +52,7 @@ function scheduleGen () {
 
 watch(() => [form.ssid, form.password, form.type, form.hidden], scheduleGen)
 onMounted(genQr)
+onBeforeUnmount(() => clearTimeout(debounceTimer))
 
 // ---------- 扫码识别已有 WiFi 二维码 ----------
 function onScanned (text) {
@@ -74,11 +75,18 @@ function copyQr () {
 
 function saveQrImage () {
   if (!qrData.value) return
-  const p = window.utools.showSaveDialog({ title: '保存 WiFi 二维码', defaultPath: `${form.ssid.trim() || 'wifi'}.png` })
+  // SSID 可能含 \ / : 等非法文件名字符，直接拼进默认路径会导致保存失败
+  const safeName = (form.ssid.trim() || 'wifi').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
+  const p = window.utools.showSaveDialog({ title: '保存 WiFi 二维码', defaultPath: `${safeName}.png` })
   if (!p) return
-  window.services.saveImage(p, qrData.value)
-  showToast('二维码已保存')
-  window.utools.shellShowItemInFolder(p)
+  try {
+    const saved = window.services.saveImage(p, qrData.value)
+    if (!saved) { showToast('保存失败：图片数据无效'); return }
+    showToast('二维码已保存')
+    window.utools.shellShowItemInFolder(p)
+  } catch (e) {
+    showToast('保存失败：' + (e && e.message ? e.message : '无法写入文件'))
+  }
 }
 
 function copyPayload () {

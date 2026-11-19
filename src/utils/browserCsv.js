@@ -20,7 +20,8 @@ function parseCsv (text) {
       } else {
         cur += ch
       }
-    } else if (ch === '"') {
+    } else if (ch === '"' && cur === '') {
+      // 引号只在字段起始处才有语法意义；字段中间的裸引号按普通字符处理
       inQuote = true
     } else if (ch === ',') {
       row.push(cur)
@@ -69,7 +70,9 @@ export function parseBrowserCsv (text) {
     }
 
     if (f.length < 4) continue
-    const [name, url, username, password, note] = f
+    const [name, url, username, , note] = f
+    // 密码取原始值：浏览器允许首尾空格密码，trim 会静默改错密码
+    const password = fRaw[3]
     if (!password) continue
 
     rows.push({

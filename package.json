@@ -1,10 +1,11 @@
 {
   "name": "my-password-utools",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "node --import ./tests/register.mjs --test tests/vault-sync.test.mjs tests/feature-fixes.test.mjs tests/entry-order.test.mjs tests/crypto-compat.test.mjs"
   },
   "dependencies": {
     "@zxing/library": "^0.23.0",
@@ -15,7 +16,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
-    "utools-api-types": "^7.5.1",
+    "utools-api-types": "^8.0.0",
     "vite": "^6.0.11"
   }
 }

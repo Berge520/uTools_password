@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import QRCode from 'qrcode'
 import { showToast } from '../utils/toast'
 import { copyText, copyImage } from '../utils/clipboard'
@@ -65,9 +65,14 @@ function saveGenImage () {
   const suffix = genFormat.value === 'dm' ? 'datamatrix' : 'qrcode'
   const p = window.utools.showSaveDialog({ title: '保存图片', defaultPath: `${suffix}_${Date.now()}.png` })
   if (!p) return
-  window.services.saveImage(p, qrData.value)
-  showToast('图片已保存')
-  window.utools.shellShowItemInFolder(p)
+  try {
+    const saved = window.services.saveImage(p, qrData.value)
+    if (!saved) { showToast('保存失败：图片数据无效'); return }
+    showToast('图片已保存')
+    window.utools.shellShowItemInFolder(p)
+  } catch (e) {
+    showToast('保存失败：' + (e && e.message ? e.message : '无法写入文件'))
+  }
 }
 
 // ---------- 识别 ----------
@@ -115,6 +120,8 @@ watch(() => props.initialText, (v) => {
 onMounted(() => {
   if (tab.value === 'gen') genQr()
 })
+
+onBeforeUnmount(() => clearTimeout(debounceTimer))
 </script>
 
 <template>
